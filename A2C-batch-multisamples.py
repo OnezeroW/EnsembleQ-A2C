@@ -46,6 +46,7 @@ LR = 3e-4                   # learning rate
 MEMORY_CAPACITY = 10000
 memory_counter = 0
 memory = np.zeros((MEMORY_CAPACITY, N_STATES * 2 + 3))
+NUM_SAMPLE = 10
 
 def generateState(Deficit, e, totalBuff, totalArrival, totalDelivered):  #generate 1-D state
     #arr1 = np.array(Buffer)[:, 1:MAX_DEADLINE+1]
@@ -174,83 +175,81 @@ for i_episode in range(NUM_EPISODE + 1):      # the first 10000 samples are stor
 
     ep_r = 0    #total reward of one episode
     for len in range(LEN_EPISODE):  #length of each episode
-        dist, value = actor(s), critic(s)
-        #a = dist.sample()
-        a = torch.multinomial(dist, 1).item()
-        log_prob = torch.log(dist[a])
+        for num in range(NUM_SAMPLE):   #generate multiple samples during each time slot
+            dist, value = actor(s), critic(s)
+            a = torch.multinomial(dist, 1).item()
+            log_prob = torch.log(dist[a])
 
-        # take action
-        #consider arrival packets here
-        #ARR_UNIFROM(0,1)
-        ARR_POISSON(LAMBDA)
-        #ARR_PERIODIC(len)
-        # update total arrival packets at current time slot
-        sumArrival.fill(0)
-        for l in range(NUM_OF_LINKS):
+            ARR_POISSON(LAMBDA)
+            # update total arrival packets at current time slot
+            sumArrival.fill(0)
+            for l in range(NUM_OF_LINKS):
+                for d in range(1, MAX_DEADLINE+1):
+                    sumArrival[l] += Arrival[l][d]
+            # update total arrival packets from beginning
+            for l in range(NUM_OF_LINKS):
+                totalArrival[l] += sumArrival[l]
+            # update buffer
+            Action.fill(0)
             for d in range(1, MAX_DEADLINE+1):
-                sumArrival[l] += Arrival[l][d]
-        # update total arrival packets from beginning
-        for l in range(NUM_OF_LINKS):
-            totalArrival[l] += sumArrival[l]
-        # update buffer
-        Action.fill(0)
-        for d in range(1, MAX_DEADLINE+1):
-            if Buffer[a][d] > 0:
-                Action[a][d] = 1
-                # update total delivered packets from beginning
-                totalDelivered[a] += 1
-                break
-
-        for l in range(NUM_OF_LINKS):
-            for d in range(1, MAX_DEADLINE+1):
-                Buffer[l][d] = max(Buffer[l][d+1] + Arrival[l][d] - Action[l][d+1], 0)
-        
-        # update totalBuff
-        totalBuff.fill(0)
-        for l in range(NUM_OF_LINKS):
-            for d in range(1, MAX_DEADLINE+1):
-                totalBuff[l] = totalBuff[l] + Buffer[l][d]
-        # update the earliest deadline on link l
-        e.fill(MAX_DEADLINE+1)      #initial earliest deadline should be MAX_DEADLINE+1
-        for l in range(NUM_OF_LINKS):
-            for d in range(1, MAX_DEADLINE+1):
-                if Buffer[l][d] > 0:
-                    e[l] = d
+                if Buffer[a][d] > 0:
+                    Action[a][d] = 1
+                    # update total delivered packets from beginning
+                    totalDelivered[a] += 1
                     break
 
-        # update deficit
-        for l in range(NUM_OF_LINKS):
-            if l == a:
-                Deficit[l] = max(Deficit[l] + sumArrival[l] * INIT_P - 1, 0)
-            else:
-                Deficit[l] = max(Deficit[l] + sumArrival[l] * INIT_P, 0)
-
-        s_ = generateState(Deficit, e, totalBuff, totalArrival, totalDelivered)   # next state s_
-
-        for l in range(NUM_OF_LINKS):
-            if totalArrival[l] == 0:
-                p_next[l] = 0
-            else:
-                p_next[l] = totalDelivered[l] / totalArrival[l] #next delivery ratio
-        r = 0
-        sumWeight = 0
-        for l in range(NUM_OF_LINKS):
-            r += weight[l] * (p_next[l] - p_current[l]) #reward calculation, R(t+1)=\sum c_l*[p_l(t+1)-p_l(t)]
-            sumWeight += weight[l]
-        r /= sumWeight   # reward r
-
-        store_transition(s, a, r, s_, log_prob)
+            for l in range(NUM_OF_LINKS):
+                for d in range(1, MAX_DEADLINE+1):
+                    Buffer[l][d] = max(Buffer[l][d+1] + Arrival[l][d] - Action[l][d+1], 0)
         
-        p_current = p_next.copy()   #current delivery ratio
-        ep_r += r
-        s = s_
+            # update totalBuff
+            totalBuff.fill(0)
+            for l in range(NUM_OF_LINKS):
+                for d in range(1, MAX_DEADLINE+1):
+                    totalBuff[l] = totalBuff[l] + Buffer[l][d]
+            # update the earliest deadline on link l
+            e.fill(MAX_DEADLINE+1)      #initial earliest deadline should be MAX_DEADLINE+1
+            for l in range(NUM_OF_LINKS):
+                for d in range(1, MAX_DEADLINE+1):
+                    if Buffer[l][d] > 0:
+                        e[l] = d
+                        break
 
+            # update deficit
+            for l in range(NUM_OF_LINKS):
+                if l == a:
+                    Deficit[l] = max(Deficit[l] + sumArrival[l] * INIT_P - 1, 0)
+                else:
+                    Deficit[l] = max(Deficit[l] + sumArrival[l] * INIT_P, 0)
+
+            s_ = generateState(Deficit, e, totalBuff, totalArrival, totalDelivered)   # next state s_
+
+            for l in range(NUM_OF_LINKS):
+                if totalArrival[l] == 0:
+                    p_next[l] = 0
+                else:
+                    p_next[l] = totalDelivered[l] / totalArrival[l] #next delivery ratio
+            r = 0
+            sumWeight = 0
+            for l in range(NUM_OF_LINKS):
+                r += weight[l] * (p_next[l] - p_current[l]) #reward calculation, R(t+1)=\sum c_l*[p_l(t+1)-p_l(t)]
+                sumWeight += weight[l]
+            r /= sumWeight   # reward r
+
+            store_transition(s, a, r, s_, log_prob)
+        
+            p_current = p_next.copy()   #current delivery ratio
+            ep_r += r
+            s = s_
+
+        # if samples are enough, then start training
         if memory_counter > MEMORY_CAPACITY:
-            #print(i_episode, len, round(ep_r + INIT_P, 3))
-            if memory_counter == MEMORY_CAPACITY + 1:
+            #print(i_episode, len, round(ep_r, 3))
+            if memory_counter == MEMORY_CAPACITY + NUM_SAMPLE:
                 print('\nCollecting experience completed! Start training...')
             if i_episode > 0:
                 result[len][i_episode-1] = round(ep_r, 3)     # current total reward
+            
 
             # sample batch transitions
             sample_index = np.random.choice(MEMORY_CAPACITY, BATCH_SIZE)
@@ -291,6 +290,6 @@ result = result / NUM_EPISODE
 res = result.detach().numpy()
 #print(res)
 
-with open('A2C-batch.txt', 'a+') as f:
+with open('A2C-batch-multisamples.txt', 'a+') as f:
     for x in res:
         f.write(str(x.item())+'\n')

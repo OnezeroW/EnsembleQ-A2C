@@ -4,30 +4,14 @@ import math
 import matplotlib
 import matplotlib.pyplot as plt
 
-
-ALG_init_x = []
-ALG_init_y = []
-ALG_x = []
-ALG_y = []
-ALG_xx = []
-ALG_yy = []
-ALG_batch_x = []
-ALG_batch_y = []
-trainedmodel_x = []
-trainedmodel_y = []
-SAC_x = []
-SAC_y = []
-A2C_x = []
-A2C_y = []
+NUM = 1000
+ND = []
+ND_trained_model = []
+A2C_batch = []
+A2C_on_policy = []
+A2C_batch_multisamples = []
 
 '''
-with open('ALG-init-x.txt', 'r+') as f:
-    for line in f.readlines():
-        try:
-            line = float(line)
-        except ValueError:
-            print('invalid input %s' %line)
-        ALG_init_x.append(line)
 with open('ALG-init-y.txt', 'r+') as f:
     for line in f.readlines():
         try:
@@ -35,99 +19,59 @@ with open('ALG-init-y.txt', 'r+') as f:
         except ValueError:
             print('invalid input %s' %line)
         ALG_init_y.append(line)
-
-with open('trainedmodel-x.txt', 'r+') as f:
-    for line in f.readlines():
-        try:
-            line = float(line)
-        except ValueError:
-            print('invalid input %s' %line)
-        trainedmodel_x.append(line)
-with open('trainedmodel-y.txt', 'r+') as f:
-    for line in f.readlines():
-        try:
-            line = float(line)
-        except ValueError:
-            print('invalid input %s' %line)
-        trainedmodel_y.append(line)
-
-with open('ALG-x.txt', 'r+') as f:
-    for line in f.readlines():
-        try:
-            line = float(line)
-        except ValueError:
-            print('invalid input %s' %line)
-        ALG_x.append(line)
-with open('ALG-y.txt', 'r+') as f:
-    for line in f.readlines():
-        try:
-            line = float(line)
-        except ValueError:
-            print('invalid input %s' %line)
-        ALG_y.append(line)
-with open('ALG-xx.txt', 'r+') as f:
-    for line in f.readlines():
-        try:
-            line = float(line)
-        except ValueError:
-            print('invalid input %s' %line)
-        ALG_xx.append(line)
-with open('ALG-yy.txt', 'r+') as f:
-    for line in f.readlines():
-        try:
-            line = float(line)
-        except ValueError:
-            print('invalid input %s' %line)
-        ALG_yy.append(line)
-
-with open('ALG-batch-x.txt', 'r+') as f:
-    for line in f.readlines():
-        try:
-            line = float(line)
-        except ValueError:
-            print('invalid input %s' %line)
-        ALG_batch_x.append(line)
-with open('ALG-batch-y.txt', 'r+') as f:
-    for line in f.readlines():
-        try:
-            line = float(line)
-        except ValueError:
-            print('invalid input %s' %line)
-        ALG_batch_y.append(line)
-
-with open('SAC-x.txt', 'r+') as f:
-    for line in f.readlines():
-        try:
-            line = float(line)
-        except ValueError:
-            print('invalid input %s' %line)
-        SAC_x.append(line)
-with open('SAC-y.txt', 'r+') as f:
-    for line in f.readlines():
-        try:
-            line = float(line)
-        except ValueError:
-            print('invalid input %s' %line)
-        SAC_y.append(line)
 '''
 
-
-'''
+with open('ND-traj.txt', 'r+') as f:
+    for line in f.readlines():
+        try:
+            line = float(line)
+        except ValueError:
+            print('invalid input %s' %line)
+        ND.append(line)
+with open('trainedmodel-traj.txt', 'r+') as f:
+    for line in f.readlines():
+        try:
+            line = float(line)
+        except ValueError:
+            print('invalid input %s' %line)
+        ND_trained_model.append(line)
 with open('A2C-batch.txt', 'r+') as f:
     for line in f.readlines():
         try:
             line = float(line)
         except ValueError:
             print('invalid input %s' %line)
-        A2C_y.append(line)
-A2C_y = A2C_y[:1000]
+        A2C_batch.append(line)
+with open('A2C-on-policy.txt', 'r+') as f:
+    for line in f.readlines():
+        try:
+            line = float(line)
+        except ValueError:
+            print('invalid input %s' %line)
+        A2C_on_policy.append(line)
+with open('A2C-batch-multisamples.txt', 'r+') as f:
+    for line in f.readlines():
+        try:
+            line = float(line)
+        except ValueError:
+            print('invalid input %s' %line)
+        A2C_batch_multisamples.append(line)
+ND = ND[:NUM]
+ND_trained_model = ND_trained_model[:NUM]
+A2C_batch = A2C_batch[:NUM]
+A2C_on_policy = A2C_on_policy[:NUM]
+A2C_batch_multisamples = A2C_batch_multisamples[:NUM]
 #plt.title('Simulation 9')
 #plt.plot(ALG_init_x, ALG_init_y, color = 'red', label = 'AMIX-ND')
 #plt.plot(trainedmodel_x, trainedmodel_y, color = 'grey', label = 'Trained-model')
 #plt.plot(ALG_x, ALG_y, color = 'green', label = 'ALG-pretrained')
 #plt.plot(ALG_xx, ALG_yy, color = 'blue', label = 'ALG-random')
 #plt.plot(ALG_batch_x, ALG_batch_y, color = 'blue', label = 'ALG-batch')
-plt.plot(A2C_y, color = 'blue', label = 'A2C-batch')
+plt.plot(ND, color = 'blue', label = 'ND')
+plt.plot(ND_trained_model, color = 'red', label = 'ND_trained_model')
+plt.plot(A2C_batch, color = 'green', label = 'A2C_batch')
+plt.plot(A2C_on_policy, color = 'grey', label = 'A2C_on_policy')
+plt.plot(A2C_batch, color = 'orange', label = 'A2C_batch_multisamples')
 plt.legend()
 plt.xlabel('Steps')
 plt.ylabel('Average delivery ratio')
@@ -135,8 +79,8 @@ plt.show()
 
 
 '''
-ALG_init_epoch = []
-ALG_init_loss = []
+epoch = []
+loss = []
 with open('ALG-init-epoch.txt', 'r+') as f:
     l = 0
     for line in f.readlines():
@@ -170,3 +114,4 @@ plt.legend()
 plt.xlabel('Number of epochs')
 plt.ylabel('Training loss')
 plt.show()
+'''

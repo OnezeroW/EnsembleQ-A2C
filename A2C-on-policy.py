@@ -5,12 +5,16 @@ import torch.nn.functional as F
 import numpy as np
 import random as rd
 import torch.optim as optim
+import matplotlib
+import matplotlib.pyplot as plt
+
+import os
+os.environ['KMP_DUPLICATE_LIB_OK']='True'
 
 # Hyper Parameters
 NUM_OF_LINKS=5
 MAX_DEADLINE=10
 LAMBDA = 0.02
-#EPSILON = 0.05
 # 1 <= d <= d_max, Buffer[l][0]=0, Buffer[l][d_max+1]=0
 Buffer = np.zeros((NUM_OF_LINKS, MAX_DEADLINE+2), dtype=np.float)
 Deficit = np.zeros((NUM_OF_LINKS), dtype=np.float)
@@ -24,17 +28,24 @@ totalBuff = np.zeros((NUM_OF_LINKS), dtype=np.float)
 # e[l]: earliest deadline of link l
 e = np.zeros((NUM_OF_LINKS), dtype=np.int)
 
+
 #weight = np.random.random(NUM_OF_LINKS)   #weight of each link
 weight = np.ones((NUM_OF_LINKS), dtype=np.float)
+#weight = np.array([0.05, 0.3, 0.4, 0.1, 0.15])
 p_current = np.zeros((NUM_OF_LINKS), dtype=np.float)    #current delivery ratio
 p_next = np.zeros((NUM_OF_LINKS), dtype=np.float)   #next delivery ratio
 
 N_ACTIONS = NUM_OF_LINKS
-N_STATES = NUM_OF_LINKS * 5    #State s = (Deficit, e, TB, TA, TD)
-HIDDEN_SIZE = 20    # the dim of hidden layers
+N_STATES = NUM_OF_LINKS * 5
 INIT_P = 0.75    #initial delivery ratio p0
-NUM_EPISODE = 100  # the number of episode
-LEN_EPISODE = 5000   # the length of each episode
+NUM_EPISODE = 10  # the number of episode
+LEN_EPISODE = 10000   # the length of each episode
+BATCH_SIZE = 128
+HIDDEN_SIZE = 20    # the dim of hidden layers
+LR = 3e-4                   # learning rate
+MEMORY_CAPACITY = 10000
+memory_counter = 0
+memory = np.zeros((MEMORY_CAPACITY, N_STATES * 2 + 3))
 
 def generateState(Deficit, e, totalBuff, totalArrival, totalDelivered):  #generate 1-D state
     #arr1 = np.array(Buffer)[:, 1:MAX_DEADLINE+1]
@@ -90,9 +101,9 @@ def ARR_PERIODIC(index):
         Arrival[1][3] = 1
 '''
 
-class Net(nn.Module):
+class Actor(nn.Module):
     def __init__(self, ):
-        super(Net, self).__init__()
+        super(Actor, self).__init__()
         self.layer1 = nn.Linear(N_STATES, HIDDEN_SIZE)
         self.layer1.weight.data.normal_(0, 0.02)
         self.layer2 = nn.Linear(HIDDEN_SIZE, HIDDEN_SIZE)
@@ -109,22 +120,44 @@ class Net(nn.Module):
         action_probs = F.softmax(x, dim=-1)
         return action_probs
 
-net = Net()
-net.load_state_dict(torch.load('params.pkl'))     # load initial NN model trained from base policy
-print('Model loaded! Start running...')
+class Critic(nn.Module):
+    def __init__(self, ):
+        super(Critic, self).__init__()
+        self.layer1 = nn.Linear(N_STATES, HIDDEN_SIZE)
+        self.layer1.weight.data.normal_(0, 0.02)
+        self.layer2 = nn.Linear(HIDDEN_SIZE, HIDDEN_SIZE)
+        self.layer2.weight.data.normal_(0, 0.02)
+        self.value = nn.Linear(HIDDEN_SIZE, 1)
+        self.value.weight.data.normal_(0, 0.02)
+        
+    def forward(self, x):
+        x = self.layer1(x)
+        x = F.relu(x)
+        x = self.layer2(x)
+        x = F.relu(x)
+        state_value = self.value(x)
+        return state_value
+
+actor, critic = Actor(), Critic()
+actor.load_state_dict(torch.load('params.pkl'))     # load initial NN model trained from base policy
+optimizerA = optim.Adam(actor.parameters(), lr=LR)
+optimizerC = optim.Adam(critic.parameters(), lr=LR)
+
+actor_criterion = nn.MSELoss()
 
 xval = []
 yval = []
-result = torch.zeros((LEN_EPISODE, NUM_EPISODE))
-#print('\nCollecting experience...')
-for i_episode in range(NUM_EPISODE):
+result = torch.zeros((LEN_EPISODE, NUM_EPISODE))        # store the reward of each trajectory
+
+for i_episode in range(NUM_EPISODE):      # the first 10000 samples are stored in memory
     #initialize state s
     Buffer.fill(0)
     Deficit.fill(0)
     totalArrival.fill(0)    #mark
     totalDelivered.fill(0)
+
     totalBuff.fill(0)
-    e.fill(MAX_DEADLINE + 1) 
+    e.fill(MAX_DEADLINE+1) 
 
     # current state s
     s = generateState(Deficit, e, totalBuff, totalArrival, totalDelivered)
@@ -132,21 +165,15 @@ for i_episode in range(NUM_EPISODE):
 
     ep_r = 0    #total reward of one episode
     for len in range(LEN_EPISODE):  #length of each episode
-        dist = net(s)
-        '''
-        eps = rd.random()   # epsilon-greedy
-        if eps < EPSILON:
-            a = rd.randint(0, NUM_OF_LINKS-1)
-        else:
-            a = torch.multinomial(dist, 1).item()
-        '''
+        dist, value = actor(s), critic(s)
+        #a = dist.sample()
         a = torch.multinomial(dist, 1).item()
+        log_prob = torch.log(dist[a])
 
         # take action
-        
         #consider arrival packets here
         #ARR_UNIFROM(0,1)
-        ARR_POISSON(0.02)
+        ARR_POISSON(LAMBDA)
         #ARR_PERIODIC(len)
         # update total arrival packets at current time slot
         sumArrival.fill(0)
@@ -175,13 +202,13 @@ for i_episode in range(NUM_EPISODE):
             for d in range(1, MAX_DEADLINE+1):
                 totalBuff[l] = totalBuff[l] + Buffer[l][d]
         # update the earliest deadline on link l
-        e.fill(MAX_DEADLINE + 1)      #initial earliest deadline should be MAX_DEADLINE+1
+        e.fill(MAX_DEADLINE+1)      #initial earliest deadline should be MAX_DEADLINE+1
         for l in range(NUM_OF_LINKS):
             for d in range(1, MAX_DEADLINE+1):
                 if Buffer[l][d] > 0:
                     e[l] = d
                     break
-        
+
         # update deficit
         for l in range(NUM_OF_LINKS):
             if l == a:
@@ -203,30 +230,39 @@ for i_episode in range(NUM_EPISODE):
             sumWeight += weight[l]
         r /= sumWeight   # reward r
 
+        next_value = critic(s_)
+        advantage = r + next_value - value
+        critic_loss = actor_criterion(value, r + next_value)
+        actor_loss = -log_prob * advantage.detach() # minus ?
+
+        optimizerA.zero_grad()
+        optimizerC.zero_grad()
+        actor_loss.backward()
+        critic_loss.backward()
+        optimizerA.step()
+        optimizerC.step()
+        
         p_current = p_next.copy()   #current delivery ratio
         ep_r += r
         s = s_
         result[len][i_episode] = round(ep_r, 3)
 
-        if len == LEN_EPISODE-1:
-            ###print('Iteration number: ', i_episode,
-                    ###'| Total reward: ', round(ep_r, 3))
-            xval.append(i_episode)
-            yval.append(round(ep_r, 3))
-
+'''
+            for parameters in actor.parameters():
+                print(parameters)
+'''
+'''
+            if len == LEN_EPISODE-1:
+                print('Episode number: ', i_episode,
+                    '| Total reward: ', round(ep_r + INIT_P, 3))
+                xval.append(i_episode)
+                yval.append(round(ep_r + INIT_P, 3))
+'''
 result = result.sum(-1, keepdim = True)
 result = result / NUM_EPISODE
 res = result.detach().numpy()
 #print(res)
 
-'''
-with open('trainedmodel-x.txt', 'a+') as f:
-    for x in xval:
-        f.write(str(x)+'\n')
-with open('trainedmodel-y.txt', 'a+') as f:
-    for y in yval:
-        f.write(str(y)+'\n')
-'''
-with open('trainedmodel-traj.txt', 'a+') as f:
+with open('A2C-on-policy.txt', 'a+') as f:
     for x in res:
         f.write(str(x.item())+'\n')

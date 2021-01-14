@@ -29,8 +29,8 @@ N_ACTIONS = NUM_OF_LINKS
 #N_STATES = NUM_OF_LINKS * (MAX_DEADLINE + 3)    #State s = (Buffer, Deficit, TA, TD)
 N_STATES = NUM_OF_LINKS * 5    #State s = (Deficit, e, TB, TA, TD)
 INIT_P = 0.75    #initial delivery ratio p0
-NUM_EPISODE = 1000  # the number of episode
-LEN_EPISODE = 500   # the length of each episode
+NUM_EPISODE = 100  # the number of episode
+LEN_EPISODE = 5000   # the length of each episodex
 BATCH_SIZE = 128
 HIDDEN_SIZE = 20    # the dim of hidden layers
 NUM_EPOCH = 10000
@@ -153,47 +153,6 @@ def ARR_POISSON(lam):
     for l in range(NUM_OF_LINKS):
         for d in range(1, MAX_DEADLINE+1):
             Arrival[l][d] = np.random.poisson(lam)
-'''
-# non-i.i.d., periodic traffic pattern
-def ARR_PERIODIC(index):
-    global Arrival
-    #Arrival.fill(0)
-    Arrival = [[0,0,0,0,0,0,0,0,0,0,0],
-                [0,0,0,0,0,0,0,0,0,0,0],
-                [0,0,0,0,0,0,0,0,0,0,0],
-                [0,0,0,0,0,0,0,0,0,0,0],
-                [0,0,0,0,0,0,0,0,0,0,0]]
-    if index % 5 == 0:
-        Arrival = [[0,1,0,0,0,0,0,0,0,0,0],
-                   [0,0,1,0,1,0,0,0,0,0,0],
-                   [0,0,0,1,0,0,0,0,0,0,0],
-                   [0,0,0,0,1,0,0,0,0,0,0],
-                   [0,0,0,0,0,1,0,0,0,0,0]]
-    elif index % 5 == 1:
-        Arrival = [[0,0,0,1,0,0,0,0,0,0,0],
-                   [0,0,0,0,1,0,0,0,0,0,0],
-                   [0,0,0,0,0,1,0,1,0,0,0],
-                   [0,0,0,0,0,0,1,0,0,0,0],
-                   [0,0,0,0,0,0,0,1,0,0,0]]
-    elif index % 5 == 2:
-        Arrival = [[0,0,0,0,0,1,0,0,0,0,0],
-                   [0,0,0,0,0,0,1,0,0,0,0],
-                   [0,0,0,0,0,0,0,1,0,0,0],
-                   [0,0,0,0,0,0,0,0,1,0,1],
-                   [0,0,0,0,0,0,0,0,0,1,0]]
-    elif index % 5 == 3:
-        Arrival = [[0,0,0,0,0,0,0,1,0,0,0],
-                   [0,0,0,0,0,0,0,0,1,0,0],
-                   [0,0,0,0,0,0,0,0,0,1,0],
-                   [0,0,0,0,0,0,0,0,0,0,1],
-                   [0,1,0,0,0,0,0,0,0,0,0]]
-    else:
-        Arrival = [[0,0,0,0,0,0,0,0,0,1,0],
-                   [0,0,0,0,0,0,0,0,0,0,1],
-                   [0,0,0,0,1,0,0,0,0,0,0],
-                   [0,0,0,0,0,1,0,0,0,0,0],
-                   [0,0,0,1,0,0,0,0,0,0,0]]
-'''
 
 # non-i.i.d., periodic traffic pattern
 def ARR_PERIODIC(index):
@@ -210,19 +169,6 @@ def ARR_PERIODIC(index):
     else:
         pass
 '''
-    if index % 5 == 0:
-        # pattern B
-        Arrival[0][2] = 1
-        Arrival[1][1] = 1
-    elif index % 5 == 2:
-        # pattern C
-        Arrival[0][1] = 1
-        Arrival[1][2] = 1
-        Arrival[1][3] = 1
-    else:
-        pass
-'''
-'''
         # pattern A
         Arrival[0][1] = 1
         Arrival[1][2] = 1
@@ -238,6 +184,7 @@ def ARR_PERIODIC(index):
 
 xval = []
 yval = []
+result = torch.zeros((LEN_EPISODE, NUM_EPISODE))
 print('Collecting experience...')
 for i_episode in range(NUM_EPISODE):
     # initialization
@@ -316,15 +263,7 @@ for i_episode in range(NUM_EPISODE):
 
         # update Action
         Action.fill(0)
-        '''
-        # if deficit=0 for all links, then choose link with totalBuff > 0 to be active
-        if currentActiveLink == -1:
-            for l in range(NUM_OF_LINKS):
-                if totalBuff[l] > 0:
-                    currentActiveLink = l
-        elstDeadline = e[currentActiveLink]
-        Action[currentActiveLink][elstDeadline] = 1
-        '''
+
         if currentActiveLink != -1:
             elstDeadline = e[currentActiveLink]
             Action[currentActiveLink][elstDeadline] = 1
@@ -335,27 +274,35 @@ for i_episode in range(NUM_EPISODE):
             for d in range(1, MAX_DEADLINE+1):
                 sumAction[l] = sumAction[l] + Action[l][d]
 
-    for l in range(NUM_OF_LINKS):
-        if totalArrival[l] == 0:
-            p_next[l] = 0
-        else:
-            p_next[l] = totalDelivered[l] / totalArrival[l] #next delivery ratio
-    rr = 0
-    sumWeight = 0
-    for l in range(NUM_OF_LINKS):
-        rr += weight[l] * p_next[l]
-        sumWeight += weight[l]
-    rr /= sumWeight
-    ###print('Episode:', i_episode, ', total reward:', rr)
+        for l in range(NUM_OF_LINKS):
+            if totalArrival[l] == 0:
+                p_next[l] = 0
+            else:
+                p_next[l] = totalDelivered[l] / totalArrival[l] #next delivery ratio
+        rr = 0
+        sumWeight = 0
+        for l in range(NUM_OF_LINKS):
+            rr += weight[l] * p_next[l]
+            sumWeight += weight[l]
+        rr /= sumWeight
+        result[index][i_episode] = round(rr, 3)
     xval.append(i_episode)
     yval.append(round(rr, 3))
-
+'''
 with open('ALG-init-x.txt', 'a+') as f:
     for x in xval:
         f.write(str(x)+'\n')
 with open('ALG-init-y.txt', 'a+') as f:
     for y in yval:
         f.write(str(y)+'\n')
+'''
+result = result.sum(-1, keepdim = True)
+result = result / NUM_EPISODE
+res = result.detach().numpy()
+#print(res)
+with open('ND-traj.txt', 'a+') as f:
+    for x in res:
+        f.write(str(x.item())+'\n')
 
 epochnum = range(NUM_EPOCH)
 zval = []
@@ -371,14 +318,6 @@ for epoch in range(NUM_EPOCH):
     b_ap = Variable(torch.FloatTensor(b_memory[:, -N_ACTIONS:]))
     b_net = initialNet(b_s)
     loss = criterion(b_net, b_ap)
-    '''
-    loss = 0
-    for i in range(BATCH_SIZE):
-        for j in range(N_ACTIONS):
-            loss += (b_ap[i,j]-b_net[i,j]).pow(2)
-    loss /= (BATCH_SIZE * 2)
-    '''
-
     print('epoch=', epoch, ', loss=', loss.item())
     zval.append(loss.item())
     optimizer.zero_grad()
