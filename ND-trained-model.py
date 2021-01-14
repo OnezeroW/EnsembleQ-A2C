@@ -146,7 +146,7 @@ for i_episode in range(NUM_EPISODE):
         
         #consider arrival packets here
         #ARR_UNIFROM(0,1)
-        ARR_POISSON(0.02)
+        ARR_POISSON(LAMBDA)
         #ARR_PERIODIC(len)
         # update total arrival packets at current time slot
         sumArrival.fill(0)
