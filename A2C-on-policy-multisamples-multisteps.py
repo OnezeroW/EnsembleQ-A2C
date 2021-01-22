@@ -43,10 +43,11 @@ LEN_EPISODE = 10000   # the length of each episode
 BATCH_SIZE = 128
 HIDDEN_SIZE = 64    # the dim of hidden layers
 LR = 3e-4                   # learning rate
-MEMORY_CAPACITY = 10000
+MEMORY_CAPACITY = 100
 memory_counter = 0
 memory = np.zeros((MEMORY_CAPACITY, N_STATES * 2 + 3))
 NUM_SAMPLE = 10
+NUM_STEP = 10
 
 def generateState(Deficit, e, totalBuff, totalArrival, totalDelivered):  #generate 1-D state
     #arr1 = np.array(Buffer)[:, 1:MAX_DEADLINE+1]
@@ -174,81 +175,164 @@ for i_episode in range(NUM_EPISODE + 1):      # the first 10000 samples are stor
     p_current.fill(0)
 
     ep_r = 0    #total reward of one episode
-    for len in range(int(LEN_EPISODE/NUM_SAMPLE)):  #length of each episode
+    for len in range(int(LEN_EPISODE/NUM_STEP)):  #length of each episode
         for num in range(NUM_SAMPLE):   #generate multiple samples during each time slot
-            dist, value = actor(s), critic(s)
-            a = torch.multinomial(dist, 1).item()
-            log_prob = torch.log(dist[a])
+            ss = s.clone()
+            if num == NUM_SAMPLE - 1:
+                for step in range(NUM_STEP):
+                    dist, value = actor(s), critic(s)
+                    a = torch.multinomial(dist, 1).item()
+                    log_prob = torch.log(dist[a])
 
-            ARR_POISSON(LAMBDA)
-            # update total arrival packets at current time slot
-            sumArrival.fill(0)
-            for l in range(NUM_OF_LINKS):
-                for d in range(1, MAX_DEADLINE+1):
-                    sumArrival[l] += Arrival[l][d]
-            # update total arrival packets from beginning
-            for l in range(NUM_OF_LINKS):
-                totalArrival[l] += sumArrival[l]
-            # update buffer
-            Action.fill(0)
-            for d in range(1, MAX_DEADLINE+1):
-                if Buffer[a][d] > 0:
-                    Action[a][d] = 1
-                    # update total delivered packets from beginning
-                    totalDelivered[a] += 1
-                    break
+                    ARR_POISSON(LAMBDA)
+                    # update total arrival packets at current time slot
+                    sumArrival.fill(0)
+                    for l in range(NUM_OF_LINKS):
+                        for d in range(1, MAX_DEADLINE+1):
+                            sumArrival[l] += Arrival[l][d]
+                    # update total arrival packets from beginning
+                    for l in range(NUM_OF_LINKS):
+                        totalArrival[l] += sumArrival[l]
+                    # update buffer
+                    Action.fill(0)
+                    for d in range(1, MAX_DEADLINE+1):
+                        if Buffer[a][d] > 0:
+                            Action[a][d] = 1
+                            # update total delivered packets from beginning
+                            totalDelivered[a] += 1
+                            break
 
-            for l in range(NUM_OF_LINKS):
-                for d in range(1, MAX_DEADLINE+1):
-                    Buffer[l][d] = max(Buffer[l][d+1] + Arrival[l][d] - Action[l][d+1], 0)
-        
-            # update totalBuff
-            totalBuff.fill(0)
-            for l in range(NUM_OF_LINKS):
-                for d in range(1, MAX_DEADLINE+1):
-                    totalBuff[l] = totalBuff[l] + Buffer[l][d]
-            # update the earliest deadline on link l
-            e.fill(MAX_DEADLINE+1)      #initial earliest deadline should be MAX_DEADLINE+1
-            for l in range(NUM_OF_LINKS):
-                for d in range(1, MAX_DEADLINE+1):
-                    if Buffer[l][d] > 0:
-                        e[l] = d
-                        break
+                    for l in range(NUM_OF_LINKS):
+                        for d in range(1, MAX_DEADLINE+1):
+                            Buffer[l][d] = max(Buffer[l][d+1] + Arrival[l][d] - Action[l][d+1], 0)
+                
+                    # update totalBuff
+                    totalBuff.fill(0)
+                    for l in range(NUM_OF_LINKS):
+                        for d in range(1, MAX_DEADLINE+1):
+                            totalBuff[l] = totalBuff[l] + Buffer[l][d]
+                    # update the earliest deadline on link l
+                    e.fill(MAX_DEADLINE+1)      #initial earliest deadline should be MAX_DEADLINE+1
+                    for l in range(NUM_OF_LINKS):
+                        for d in range(1, MAX_DEADLINE+1):
+                            if Buffer[l][d] > 0:
+                                e[l] = d
+                                break
 
-            # update deficit
-            for l in range(NUM_OF_LINKS):
-                if l == a:
-                    Deficit[l] = max(Deficit[l] + sumArrival[l] * INIT_P - 1, 0)
-                else:
-                    Deficit[l] = max(Deficit[l] + sumArrival[l] * INIT_P, 0)
+                    # update deficit
+                    for l in range(NUM_OF_LINKS):
+                        if l == a:
+                            Deficit[l] = max(Deficit[l] + sumArrival[l] * INIT_P - 1, 0)
+                        else:
+                            Deficit[l] = max(Deficit[l] + sumArrival[l] * INIT_P, 0)
 
-            s_ = generateState(Deficit, e, totalBuff, totalArrival, totalDelivered)   # next state s_
+                    s_ = generateState(Deficit, e, totalBuff, totalArrival, totalDelivered)   # next state s_
 
-            for l in range(NUM_OF_LINKS):
-                if totalArrival[l] == 0:
-                    p_next[l] = 0
-                else:
-                    p_next[l] = totalDelivered[l] / totalArrival[l] #next delivery ratio
-            r = 0
-            sumWeight = 0
-            for l in range(NUM_OF_LINKS):
-                r += weight[l] * (p_next[l] - p_current[l]) #reward calculation, R(t+1)=\sum c_l*[p_l(t+1)-p_l(t)]
-                sumWeight += weight[l]
-            r /= sumWeight   # reward r
+                    for l in range(NUM_OF_LINKS):
+                        if totalArrival[l] == 0:
+                            p_next[l] = 0
+                        else:
+                            p_next[l] = totalDelivered[l] / totalArrival[l] #next delivery ratio
+                    r = 0
+                    sumWeight = 0
+                    for l in range(NUM_OF_LINKS):
+                        r += weight[l] * (p_next[l] - p_current[l]) #reward calculation, R(t+1)=\sum c_l*[p_l(t+1)-p_l(t)]
+                        sumWeight += weight[l]
+                    r /= sumWeight   # reward r
 
-            store_transition(s, a, r, s_, log_prob)
-        
-            p_current = p_next.copy()   #current delivery ratio
-            ep_r += r
-            s = s_
+                    store_transition(s, a, r, s_, log_prob)
+                
+                    p_current = p_next.copy()   #current delivery ratio
+                    ep_r += r
+                    s = s_
 
-            if i_episode > 0:
-                result[len*NUM_SAMPLE+num][i_episode-1] = round(ep_r, 3)     # current total reward
+                    if i_episode > 0:
+                        result[len*NUM_STEP+step][i_episode-1] = round(ep_r, 3)     # current total reward
+
+            else:
+                Buffer_temp = Buffer.copy()
+                Deficit_temp = Deficit.copy()
+                #Arrival_temp = Arrival.copy()
+                sumArrival_temp = sumArrival.copy()
+                totalArrival_temp = totalArrival.copy()
+                totalDelivered_temp = totalDelivered.copy()
+                #Action_temp = Action.copy()
+                totalBuff_temp = totalBuff.copy()
+                e_temp = e.copy()
+                p_current_temp = p_current.copy()
+                p_next_temp = p_next.copy()
+
+                for step in range(NUM_STEP):
+                    dist, value = actor(ss), critic(ss)
+                    a = torch.multinomial(dist, 1).item()
+                    log_prob = torch.log(dist[a])
+
+                    ARR_POISSON(LAMBDA)
+                    # update total arrival packets at current time slot
+                    sumArrival_temp.fill(0)
+                    for l in range(NUM_OF_LINKS):
+                        for d in range(1, MAX_DEADLINE+1):
+                            sumArrival_temp[l] += Arrival[l][d]
+                    # update total arrival packets from beginning
+                    for l in range(NUM_OF_LINKS):
+                        totalArrival_temp[l] += sumArrival_temp[l]
+                    # update buffer
+                    Action.fill(0)
+                    for d in range(1, MAX_DEADLINE+1):
+                        if Buffer_temp[a][d] > 0:
+                            Action[a][d] = 1
+                            # update total delivered packets from beginning
+                            totalDelivered_temp[a] += 1
+                            break
+
+                    for l in range(NUM_OF_LINKS):
+                        for d in range(1, MAX_DEADLINE+1):
+                            Buffer_temp[l][d] = max(Buffer_temp[l][d+1] + Arrival[l][d] - Action[l][d+1], 0)
+            
+                    # update totalBuff
+                    totalBuff_temp.fill(0)
+                    for l in range(NUM_OF_LINKS):
+                        for d in range(1, MAX_DEADLINE+1):
+                            totalBuff_temp[l] = totalBuff_temp[l] + Buffer_temp[l][d]
+                    # update the earliest deadline on link l
+                    e_temp.fill(MAX_DEADLINE+1)      #initial earliest deadline should be MAX_DEADLINE+1
+                    for l in range(NUM_OF_LINKS):
+                        for d in range(1, MAX_DEADLINE+1):
+                            if Buffer_temp[l][d] > 0:
+                                e_temp[l] = d
+                                break
+
+                    # update deficit
+                    for l in range(NUM_OF_LINKS):
+                        if l == a:
+                            Deficit_temp[l] = max(Deficit_temp[l] + sumArrival_temp[l] * INIT_P - 1, 0)
+                        else:
+                            Deficit_temp[l] = max(Deficit_temp[l] + sumArrival_temp[l] * INIT_P, 0)
+
+                    ss_ = generateState(Deficit_temp, e_temp, totalBuff_temp, totalArrival_temp, totalDelivered_temp)   # next state s_
+
+                    for l in range(NUM_OF_LINKS):
+                        if totalArrival_temp[l] == 0:
+                            p_next_temp[l] = 0
+                        else:
+                            p_next_temp[l] = totalDelivered_temp[l] / totalArrival_temp[l] #next delivery ratio
+                    r = 0
+                    sumWeight = 0
+                    for l in range(NUM_OF_LINKS):
+                        r += weight[l] * (p_next_temp[l] - p_current_temp[l]) #reward calculation, R(t+1)=\sum c_l*[p_l(t+1)-p_l(t)]
+                        sumWeight += weight[l]
+                    r /= sumWeight   # reward r
+
+                    store_transition(ss, a, r, ss_, log_prob)
+
+                    p_current_temp = p_next_temp.copy()   #current delivery ratio
+                    #ep_r += r
+                    ss = ss_
 
         # if samples are enough, then start training
         if memory_counter > MEMORY_CAPACITY:
             #print(i_episode, len, round(ep_r, 3))
-            if memory_counter == MEMORY_CAPACITY + NUM_SAMPLE:
+            if memory_counter == MEMORY_CAPACITY + NUM_SAMPLE * NUM_STEP:
                 print('\nCollecting experience completed! Start training...')
             '''
             if i_episode > 0:
@@ -256,8 +340,8 @@ for i_episode in range(NUM_EPISODE + 1):      # the first 10000 samples are stor
             '''
 
             # sample batch transitions
-            sample_index = np.random.choice(MEMORY_CAPACITY, BATCH_SIZE)
-            b_memory = memory[sample_index, :]
+            #sample_index = np.random.choice(MEMORY_CAPACITY, BATCH_SIZE)
+            b_memory = memory[:, :]
             b_s = Variable(torch.FloatTensor(b_memory[:, :N_STATES]))
             b_a = Variable(torch.LongTensor(b_memory[:, N_STATES:N_STATES+1].astype(int)))
             b_r = Variable(torch.FloatTensor(b_memory[:, N_STATES+1:N_STATES+2]))
@@ -294,6 +378,6 @@ result = result / NUM_EPISODE
 res = result.detach().numpy()
 #print(res)
 
-with open('A2C-batch-multisamples.txt', 'a+') as f:
+with open('A2C-on-policy-multisamples-multisteps.txt', 'a+') as f:
     for x in res:
         f.write(str(x.item())+'\n')
