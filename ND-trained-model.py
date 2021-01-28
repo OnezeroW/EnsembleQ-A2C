@@ -7,9 +7,10 @@ import random as rd
 import torch.optim as optim
 
 # Hyper Parameters
-NUM_OF_LINKS=5
+NUM_OF_LINKS=10
 MAX_DEADLINE=10
-LAMBDA = 0.02
+#LAMBDA = [0.01, 0.015, 0.02]
+LAMBDA = 0.015
 #EPSILON = 0.05
 # 1 <= d <= d_max, Buffer[l][0]=0, Buffer[l][d_max+1]=0
 Buffer = np.zeros((NUM_OF_LINKS, MAX_DEADLINE+2), dtype=np.float)
@@ -31,10 +32,10 @@ p_next = np.zeros((NUM_OF_LINKS), dtype=np.float)   #next delivery ratio
 
 N_ACTIONS = NUM_OF_LINKS
 N_STATES = NUM_OF_LINKS * 5    #State s = (Deficit, e, TB, TA, TD)
-HIDDEN_SIZE = 20    # the dim of hidden layers
+HIDDEN_SIZE = 64    # the dim of hidden layers
 INIT_P = 0.75    #initial delivery ratio p0
 NUM_EPISODE = 100  # the number of episode
-LEN_EPISODE = 5000   # the length of each episode
+LEN_EPISODE = 10000   # the length of each episode
 
 def generateState(Deficit, e, totalBuff, totalArrival, totalDelivered):  #generate 1-D state
     #arr1 = np.array(Buffer)[:, 1:MAX_DEADLINE+1]

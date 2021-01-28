@@ -9,9 +9,10 @@ import math
 import matplotlib
 import matplotlib.pyplot as plt
 
-NUM_OF_LINKS=5
+NUM_OF_LINKS=10
 MAX_DEADLINE=10
-LAMBDA = 0.02
+#LAMBDA = [0.01, 0.015, 0.02]
+LAMBDA = 0.015
 Arrival = np.zeros((NUM_OF_LINKS, MAX_DEADLINE+1), dtype=np.float)
 sumArrival = np.zeros((NUM_OF_LINKS), dtype=np.float)
 totalArrival = np.zeros((NUM_OF_LINKS), dtype=np.float)   #TA: total arrival packets from beginning
@@ -30,9 +31,9 @@ N_ACTIONS = NUM_OF_LINKS
 N_STATES = NUM_OF_LINKS * 5    #State s = (Deficit, e, TB, TA, TD)
 INIT_P = 0.75    #initial delivery ratio p0
 NUM_EPISODE = 100  # the number of episode
-LEN_EPISODE = 5000   # the length of each episodex
+LEN_EPISODE = 10000   # the length of each episodex
 BATCH_SIZE = 128
-HIDDEN_SIZE = 20    # the dim of hidden layers
+HIDDEN_SIZE = 64    # the dim of hidden layers
 NUM_EPOCH = 10000
 LR = 3e-4                   # learning rate
 MEMORY_CAPACITY = NUM_EPISODE * LEN_EPISODE
@@ -153,6 +154,7 @@ def ARR_POISSON(lam):
     for l in range(NUM_OF_LINKS):
         for d in range(1, MAX_DEADLINE+1):
             Arrival[l][d] = np.random.poisson(lam)
+            #Arrival[l][d] = np.random.poisson(lam[l%3])
 
 # non-i.i.d., periodic traffic pattern
 def ARR_PERIODIC(index):
@@ -324,10 +326,10 @@ for epoch in range(NUM_EPOCH):
     loss.backward()
     optimizer.step()
 
-with open('ALG-init-epoch.txt', 'a+') as f:
+with open('ND-init-epoch.txt', 'a+') as f:
     for ep in epochnum:
         f.write(str(ep)+'\n')
-with open('ALG-init-loss.txt', 'a+') as f:
+with open('ND-init-loss.txt', 'a+') as f:
     for z in zval:
         f.write(str(z)+'\n')
 torch.save(initialNet.state_dict(), 'params.pkl')
