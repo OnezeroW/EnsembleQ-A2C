@@ -45,7 +45,7 @@ LEN_EPISODE = 10000   # the length of each episode
 BATCH_SIZE = 128
 HIDDEN_SIZE = 64    # the dim of hidden layers
 LR = 3e-4                   # learning rate
-MEMORY_CAPACITY = 16
+MEMORY_CAPACITY = 64
 memory_counter = 0
 memory = np.zeros((MEMORY_CAPACITY, N_STATES * 2 + 3))
 
@@ -254,17 +254,19 @@ for i_episode in range(NUM_EPISODE):
         b_s_ = Variable(torch.FloatTensor(b_memory[:, N_STATES+2:2*N_STATES+2]))
         b_log = Variable(torch.FloatTensor(b_memory[:, 2*N_STATES+2:2*N_STATES+3]), requires_grad=True)
 
-        b_value = critic(b_s)
-        b_next_value = critic(b_s_)
-        b_advantage = b_r + b_next_value - b_value
-        critic_loss = critic_criterion(b_value, b_r + b_next_value)
+        for i in range(10):
+            b_value = critic(b_s)
+            b_next_value = critic(b_s_)
+            critic_loss = critic_criterion(b_value, b_r + b_next_value)
+            optimizerC.zero_grad()
+            critic_loss.backward()
+            optimizerC.step()
+
+        b_advantage = b_r + critic(b_s_) - critic(b_s) 
         actor_loss = (-b_log * b_advantage.detach()).mean()
         optimizerA.zero_grad()
-        optimizerC.zero_grad()
         actor_loss.backward()
-        critic_loss.backward()
         optimizerA.step()
-        optimizerC.step()
 
         dist, value = actor(s), critic(s)
         a = torch.multinomial(dist, 1).item()
