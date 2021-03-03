@@ -7,10 +7,12 @@ import random as rd
 import torch.optim as optim
 
 # Hyper Parameters
-NUM_OF_LINKS=10
+NUM_OF_LINKS=6
 MAX_DEADLINE=10
-#LAMBDA = [0.01, 0.015, 0.02]
-LAMBDA = 0.015
+LAMBDA = [0.05, 0.07, 0.13]     # arrival rate = 0.5
+# LAMBDA = [0.01, 0.015, 0.025]
+# LAMBDA = [0.005, 0.01, 0.015]
+# LAMBDA = 0.01
 #EPSILON = 0.05
 # 1 <= d <= d_max, Buffer[l][0]=0, Buffer[l][d_max+1]=0
 Buffer = np.zeros((NUM_OF_LINKS, MAX_DEADLINE+2), dtype=np.float)
@@ -27,6 +29,8 @@ e = np.zeros((NUM_OF_LINKS), dtype=np.int)
 
 #weight = np.random.random(NUM_OF_LINKS)   #weight of each link
 weight = np.ones((NUM_OF_LINKS), dtype=np.float)
+# weight = np.array([0.2, 0.15, 0.15, 0.2, 0.15, 0.15])
+
 p_current = np.zeros((NUM_OF_LINKS), dtype=np.float)    #current delivery ratio
 p_next = np.zeros((NUM_OF_LINKS), dtype=np.float)   #next delivery ratio
 
@@ -34,8 +38,8 @@ N_ACTIONS = NUM_OF_LINKS
 N_STATES = NUM_OF_LINKS * 5    #State s = (Deficit, e, TB, TA, TD)
 HIDDEN_SIZE = 64    # the dim of hidden layers
 INIT_P = 0.75    #initial delivery ratio p0
-NUM_EPISODE = 100  # the number of episode
-LEN_EPISODE = 10000   # the length of each episode
+NUM_EPISODE = 10  # the number of episode
+LEN_EPISODE = 100000   # the length of each episode
 
 def generateState(Deficit, e, totalBuff, totalArrival, totalDelivered):  #generate 1-D state
     #arr1 = np.array(Buffer)[:, 1:MAX_DEADLINE+1]
@@ -61,8 +65,10 @@ def ARR_POISSON(lam):
     global Arrival
     Arrival.fill(0)
     for l in range(NUM_OF_LINKS):
-        for d in range(1, MAX_DEADLINE+1):
-            Arrival[l][d] = np.random.poisson(lam)
+        Arrival[l][MAX_DEADLINE] = np.random.poisson(lam[l%3])
+        # for d in range(1, MAX_DEADLINE+1):
+        #     # Arrival[l][d] = np.random.poisson(lam)
+        #     Arrival[l][d] = np.random.poisson(lam[l%3])
 
 # non-i.i.d., periodic traffic pattern
 def ARR_PERIODIC(index):
@@ -95,11 +101,11 @@ class Net(nn.Module):
     def __init__(self, ):
         super(Net, self).__init__()
         self.layer1 = nn.Linear(N_STATES, HIDDEN_SIZE)
-        self.layer1.weight.data.normal_(0, 0.02)
+        # self.layer1.weight.data.normal_(0, 0.02)
         self.layer2 = nn.Linear(HIDDEN_SIZE, HIDDEN_SIZE)
-        self.layer2.weight.data.normal_(0, 0.02)
+        # self.layer2.weight.data.normal_(0, 0.02)
         self.action = nn.Linear(HIDDEN_SIZE, N_ACTIONS)
-        self.action.weight.data.normal_(0, 0.02)
+        # self.action.weight.data.normal_(0, 0.02)
         
     def forward(self, x):
         x = self.layer1(x)
@@ -114,8 +120,8 @@ net = Net()
 net.load_state_dict(torch.load('params.pkl'))     # load initial NN model trained from base policy
 print('Model loaded! Start running...')
 
-xval = []
-yval = []
+# xval = []
+# yval = []
 result = torch.zeros((LEN_EPISODE, NUM_EPISODE))
 #print('\nCollecting experience...')
 for i_episode in range(NUM_EPISODE):
@@ -197,23 +203,29 @@ for i_episode in range(NUM_EPISODE):
                 p_next[l] = 0
             else:
                 p_next[l] = totalDelivered[l] / totalArrival[l] #next delivery ratio
-        r = 0
-        sumWeight = 0
-        for l in range(NUM_OF_LINKS):
-            r += weight[l] * (p_next[l] - p_current[l]) #reward calculation, R(t+1)=\sum c_l*[p_l(t+1)-p_l(t)]
-            sumWeight += weight[l]
-        r /= sumWeight   # reward r
+        # r = 0
+        # sumWeight = 0
+        # for l in range(NUM_OF_LINKS):
+        #     r += weight[l] * (p_next[l] - p_current[l]) #reward calculation, R(t+1)=\sum c_l*[p_l(t+1)-p_l(t)]
+        #     sumWeight += weight[l]
+        # r /= sumWeight   # reward r
+        # p_current = p_next.copy()   #current delivery ratio
 
-        p_current = p_next.copy()   #current delivery ratio
+        r = (p_next[a] - p_current[a]) / NUM_OF_LINKS
+
+        print('step: ', len, ', action: ', a, ', reward: ', r, p_current[a], p_next[a])
+
+        p_current[a] = p_next[a]
+
         ep_r += r
         s = s_
         result[len][i_episode] = round(ep_r, 3)
 
-        if len == LEN_EPISODE-1:
-            ###print('Iteration number: ', i_episode,
-                    ###'| Total reward: ', round(ep_r, 3))
-            xval.append(i_episode)
-            yval.append(round(ep_r, 3))
+        # if len == LEN_EPISODE-1:
+        #     ###print('Iteration number: ', i_episode,
+        #             ###'| Total reward: ', round(ep_r, 3))
+        #     xval.append(i_episode)
+        #     yval.append(round(ep_r, 3))
 
 result = result.sum(-1, keepdim = True)
 result = result / NUM_EPISODE

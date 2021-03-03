@@ -9,10 +9,15 @@ import math
 import matplotlib
 import matplotlib.pyplot as plt
 
-NUM_OF_LINKS=10
+use_cuda = torch.cuda.is_available()
+device = torch.device("cuda" if use_cuda else "cpu")
+
+NUM_OF_LINKS=6
 MAX_DEADLINE=10
-#LAMBDA = [0.01, 0.015, 0.02]
-LAMBDA = 0.015
+LAMBDA = [0.05, 0.07, 0.13]     # arrival rate = 0.5
+# LAMBDA = [0.01, 0.015, 0.025] # arrival rate = 1
+# LAMBDA = [0.005, 0.01, 0.015]
+#LAMBDA = 0.01
 Arrival = np.zeros((NUM_OF_LINKS, MAX_DEADLINE+1), dtype=np.float)
 sumArrival = np.zeros((NUM_OF_LINKS), dtype=np.float)
 totalArrival = np.zeros((NUM_OF_LINKS), dtype=np.float)   #TA: total arrival packets from beginning
@@ -30,8 +35,8 @@ N_ACTIONS = NUM_OF_LINKS
 #N_STATES = NUM_OF_LINKS * (MAX_DEADLINE + 3)    #State s = (Buffer, Deficit, TA, TD)
 N_STATES = NUM_OF_LINKS * 5    #State s = (Deficit, e, TB, TA, TD)
 INIT_P = 0.75    #initial delivery ratio p0
-NUM_EPISODE = 100  # the number of episode
-LEN_EPISODE = 10000   # the length of each episodex
+NUM_EPISODE = 10  # the number of episode
+LEN_EPISODE = 100000   # the length of each episodex
 BATCH_SIZE = 128
 HIDDEN_SIZE = 64    # the dim of hidden layers
 NUM_EPOCH = 10000
@@ -42,7 +47,7 @@ memory = np.zeros((MEMORY_CAPACITY, N_STATES + N_ACTIONS))
 
 #weight = np.random.random(NUM_OF_LINKS)   #weight of each link
 weight = np.ones((NUM_OF_LINKS), dtype=np.float)
-#weight = np.array([0.05, 0.3, 0.4, 0.1, 0.15])
+# weight = np.array([0.2, 0.15, 0.15, 0.2, 0.15, 0.15])
 
 
 class Net(nn.Module):
@@ -152,40 +157,13 @@ def store_transition(s, action_probs):
 def ARR_POISSON(lam):
     Arrival.fill(0)
     for l in range(NUM_OF_LINKS):
-        for d in range(1, MAX_DEADLINE+1):
-            Arrival[l][d] = np.random.poisson(lam)
-            #Arrival[l][d] = np.random.poisson(lam[l%3])
+        Arrival[l][MAX_DEADLINE] = np.random.poisson(lam[l%3])
+        # for d in range(1, MAX_DEADLINE+1):
+        #     # Arrival[l][d] = np.random.poisson(lam)
+        #     Arrival[l][d] = np.random.poisson(lam[l%3])
 
-# non-i.i.d., periodic traffic pattern
-def ARR_PERIODIC(index):
-    global Arrival
-    Arrival.fill(0)
-    if index % 4 == 0:
-        # pattern A
-        Arrival[0][1] = 1
-        Arrival[1][2] = 1
-    elif index % 4 == 2:
-        # pattern B
-        Arrival[0][2] = 1
-        Arrival[1][1] = 1
-    else:
-        pass
-'''
-        # pattern A
-        Arrival[0][1] = 1
-        Arrival[1][2] = 1
-        # pattern B
-        Arrival[0][2] = 1
-        Arrival[1][1] = 1
-        # pattern C
-        Arrival[0][1] = 1
-        Arrival[1][2] = 1
-        Arrival[1][3] = 1
-'''
-
-
-xval = []
-yval = []
+# xval = []
+# yval = []
 result = torch.zeros((LEN_EPISODE, NUM_EPISODE))
 print('Collecting experience...')
 for i_episode in range(NUM_EPISODE):
@@ -288,8 +266,8 @@ for i_episode in range(NUM_EPISODE):
             sumWeight += weight[l]
         rr /= sumWeight
         result[index][i_episode] = round(rr, 3)
-    xval.append(i_episode)
-    yval.append(round(rr, 3))
+    # xval.append(i_episode)
+    # yval.append(round(rr, 3))
 '''
 with open('ALG-init-x.txt', 'a+') as f:
     for x in xval:
@@ -309,10 +287,12 @@ with open('ND-traj.txt', 'a+') as f:
 epochnum = range(NUM_EPOCH)
 zval = []
 print('Collecting experience complete. Training model...')
+# initialNet = Net().to(device)
 initialNet = Net()
 optimizer = optim.Adam(initialNet.parameters(), lr = LR)
 criterion = nn.MSELoss()
 # sample batch transitions
+# memory.to(device)
 for epoch in range(NUM_EPOCH):
     sample_index = np.random.choice(MEMORY_CAPACITY, BATCH_SIZE)
     b_memory = memory[sample_index, :]
@@ -320,15 +300,16 @@ for epoch in range(NUM_EPOCH):
     b_ap = Variable(torch.FloatTensor(b_memory[:, -N_ACTIONS:]))
     b_net = initialNet(b_s)
     loss = criterion(b_net, b_ap)
-    print('epoch=', epoch, ', loss=', loss.item())
+    #print('epoch=', epoch, ', loss=', loss.item())
     zval.append(loss.item())
     optimizer.zero_grad()
     loss.backward()
     optimizer.step()
-
+'''
 with open('ND-init-epoch.txt', 'a+') as f:
     for ep in epochnum:
         f.write(str(ep)+'\n')
+'''
 with open('ND-init-loss.txt', 'a+') as f:
     for z in zval:
         f.write(str(z)+'\n')
