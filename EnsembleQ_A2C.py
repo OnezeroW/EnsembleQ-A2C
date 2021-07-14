@@ -354,7 +354,7 @@ result = result.sum(-1, keepdim = True)
 result = result / NUM_OF_AGENT
 res = result.detach().numpy()
 
-with open('EnsembleQ-N'+NUM_Q+'M'+NUM_MIN+'.txt', 'a+') as f:
+with open('EnsembleQ-N'+str(NUM_Q)+'M'+str(NUM_MIN)+'.txt', 'a+') as f:
     for x in res:
         f.write(str(x.item())+'\n')
 
