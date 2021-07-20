@@ -341,7 +341,7 @@ def run_exp(seed=0, NUM_Q=10, NUM_MIN=2, adaeq=0):
 
         if (len+1) % STEP_PER_EPOCH == 0:
             epoch = len // STEP_PER_EPOCH
-            epoch_exp_error = get_redq_true_estimate_value(q_net_list, actor, NUM_Q, n_eval=1)
+            epoch_exp_error = get_redq_true_estimate_value(q_net_list, actor, NUM_Q, n_eval=20)
             print('len=', len, ', epoch_exp_error=', epoch_exp_error, flush=True)
             Q_estimation_error.append(epoch_exp_error)
 
@@ -369,12 +369,13 @@ def run_exp(seed=0, NUM_Q=10, NUM_MIN=2, adaeq=0):
 def get_redq_true_estimate_value(q_net_list, actor, NUM_Q, n_eval=20):
     # Return estimate and true value (MC simulation) of a set of samples along the episode.
     # Totally use n_eval episode. 
-    true_return_list = []
-    estimate_return_list = []
     max_ep_len = 100
     avg_exp_error = []      # multiple Monte Carlo episodes
 
     for idx_eval in range(n_eval):
+        true_return_list = []
+        estimate_return_list = []
+
         #initialize state
         temp_Buffer = Buffer.copy()
         temp_Deficit = Deficit.copy()
@@ -491,6 +492,7 @@ def get_redq_true_estimate_value(q_net_list, actor, NUM_Q, n_eval=20):
         true_return_list_array = np.array(true_return_list)
 
         expected_true_value = abs(np.mean(true_return_list_array))
+        # print('Just for test! ', np.size(estimate_return_list_array), np.size(true_return_list_array), flush=True)
         exp_error = np.mean(estimate_return_list_array-true_return_list_array)
         exp_error = np.true_divide(exp_error, expected_true_value)
         std_error = np.std(estimate_return_list_array-true_return_list_array)
