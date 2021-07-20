@@ -19,11 +19,11 @@ LR = 3e-4       # learning rate
 # Hyperparameters
 # NUM_Q = 2  # N: number of Q networks
 # NUM_MIN = 2 # M: number of selected Q networks to update target Q value
-POLICY_UPDATE_DELAY = 20      # G: policy update delay
-NUM_OF_AGENT=64
+POLICY_UPDATE_DELAY = 10      # G: policy update delay
+NUM_OF_AGENT=32
 polyak = 0.995   # update target networks
 alpha = 1.0     # SAC entropy hyperparameter
-gamma = 1.0
+gamma = 0.99
 
 STEP_PER_EPOCH = 100
 NUM_OF_EPOCH = 200
@@ -40,8 +40,6 @@ MAX_DEADLINE=10
 LAMBDA = [0.01, 0.015, 0.025, 0.01, 0.015, 0.025]
 INIT_P = [0.8, 0.9, 1.0, 0.8, 0.9, 1.0]
 
-
-
 Buffer = np.zeros((NUM_OF_AGENT, NUM_OF_LINKS, MAX_DEADLINE+2), dtype=np.float)
 Deficit = np.zeros((NUM_OF_AGENT, NUM_OF_LINKS), dtype=np.float)
 Arrival = np.zeros((NUM_OF_AGENT, NUM_OF_LINKS, MAX_DEADLINE+1), dtype=np.float)
@@ -50,8 +48,7 @@ totalArrival = np.zeros((NUM_OF_AGENT, NUM_OF_LINKS), dtype=np.float)   #TA: tot
 totalDelivered = np.zeros((NUM_OF_AGENT, NUM_OF_LINKS), dtype=np.float) #TD: total delivered packets
 Action = np.zeros((NUM_OF_AGENT, NUM_OF_LINKS, MAX_DEADLINE+2), dtype=np.float)
 totalBuff = np.zeros((NUM_OF_AGENT, NUM_OF_LINKS), dtype=np.float)
-# e[l]: earliest deadline of link l
-e = np.zeros((NUM_OF_AGENT, NUM_OF_LINKS), dtype=np.int)
+e = np.zeros((NUM_OF_AGENT, NUM_OF_LINKS), dtype=np.int)    # e[l]: earliest deadline of link l
 weight = np.ones((NUM_OF_LINKS), dtype=np.float)
 p_current = np.zeros((NUM_OF_AGENT, NUM_OF_LINKS), dtype=np.float)    #current delivery ratio
 p_next = np.zeros((NUM_OF_AGENT, NUM_OF_LINKS), dtype=np.float)   #next delivery ratio
@@ -81,80 +78,17 @@ def store_transition(s, a, r, s_, log_prob):
     memory[index, :] = transition
     memory_counter += 1
 
-# i.i.d. with Poisson distribution
+# Poisson distribution
 def ARR_POISSON(lam, agent):
     global Arrival
     Arrival[agent].fill(0)
     for l in range(NUM_OF_LINKS):
-        # Arrival[agent][l][MAX_DEADLINE] = np.random.poisson(lam[l%6])
         for d in range(1, MAX_DEADLINE+1):
-            # Arrival[agent][l][d] = np.random.poisson(lam)
             Arrival[agent][l][d] = np.random.poisson(lam[l])
 
 # wi = 0.02
 # wi = 1 / HIDDEN_SIZE
 # wi = 2 / HIDDEN_SIZE
-# class Actor(nn.Module):
-#     def __init__(self, ):
-#         super(Actor, self).__init__()
-#         self.layer1 = nn.Linear(N_STATES, HIDDEN_SIZE)
-#         self.layer1.weight.data.normal_(0, 0.02)
-#         self.layer2 = nn.Linear(HIDDEN_SIZE, HIDDEN_SIZE)
-#         self.layer2.weight.data.normal_(0, 0.02)
-#         self.layer3 = nn.Linear(HIDDEN_SIZE, HIDDEN_SIZE)
-#         self.layer3.weight.data.normal_(0, 0.02)
-#         # self.layer4 = nn.Linear(HIDDEN_SIZE, HIDDEN_SIZE)
-#         # self.layer4.weight.data.normal_(0, 0.02)
-#         # self.layer5 = nn.Linear(HIDDEN_SIZE, HIDDEN_SIZE)
-#         # self.layer5.weight.data.normal_(0, 0.02)
-#         self.action = nn.Linear(HIDDEN_SIZE, N_ACTIONS)
-#         self.action.weight.data.normal_(0, 0.02)
-
-#     def forward(self, x):
-#         x = self.layer1(x)
-#         x = F.relu(x)
-#         x = self.layer2(x)
-#         x = F.relu(x)
-#         x = self.layer3(x)
-#         x = F.relu(x)
-#         # x = self.layer4(x)
-#         # x = F.relu(x)
-#         # x = self.layer5(x)
-#         # x = F.relu(x)
-#         x = self.action(x)
-#         x = torch.clamp(x, -bound, bound) # clip input of softmax to avoid nan
-#         action_probs = F.softmax(x, dim=-1)
-#         return action_probs
-
-# class Critic(nn.Module):
-#     def __init__(self, ):
-#         super(Critic, self).__init__()
-#         self.layer1 = nn.Linear(N_STATES + 1, HIDDEN_SIZE)    # input: state, action
-#         self.layer1.weight.data.normal_(0, 0.02)
-#         self.layer2 = nn.Linear(HIDDEN_SIZE, HIDDEN_SIZE)
-#         self.layer2.weight.data.normal_(0, 0.02)
-#         self.layer3 = nn.Linear(HIDDEN_SIZE, HIDDEN_SIZE)
-#         self.layer3.weight.data.normal_(0, 0.02)
-#         # self.layer4 = nn.Linear(HIDDEN_SIZE, HIDDEN_SIZE)
-#         # self.layer4.weight.data.normal_(0, 0.02)
-#         # self.layer5 = nn.Linear(HIDDEN_SIZE, HIDDEN_SIZE)
-#         # self.layer5.weight.data.normal_(0, 0.02)
-#         self.value = nn.Linear(HIDDEN_SIZE, 1)
-#         self.value.weight.data.normal_(0, 0.02)
-
-#     def forward(self, x):
-#         x = self.layer1(x)
-#         x = F.relu(x)
-#         x = self.layer2(x)
-#         x = F.relu(x)
-#         x = self.layer3(x)
-#         x = F.relu(x)
-#         # x = self.layer4(x)
-#         # x = F.relu(x)
-#         # x = self.layer5(x)
-#         # x = F.relu(x)
-#         state_value = self.value(x)
-#         return state_value
 class Actor(nn.Module):
     def __init__(self, ):
         super(Actor, self).__init__()
@@ -235,7 +169,11 @@ def run_exp(seed=0, NUM_Q=10, NUM_MIN=2, adaeq=0):
     #total reward of one episode
     ep_r = np.zeros((NUM_OF_AGENT), dtype=np.float)
 
+    EVAL_INT = 5000
     for len in range(LEN_EPISODE):  #length of each episode
+        if (len+1) % EVAL_INT == 0:
+            torch.save(actor.state_dict(), 'EnsembleQ-N'+str(NUM_Q)+'M'+str(NUM_MIN)+'-'+str(adaeq)+'-'+str(seed)+'-'+str(len+1)+'.pkl')
+            
         for agent in range(NUM_OF_AGENT):
         #for num in range(MEMORY_CAPACITY):   #generate multiple samples during each time slot
             # s[agent] = s[agent].to(device)
@@ -299,8 +237,7 @@ def run_exp(seed=0, NUM_Q=10, NUM_MIN=2, adaeq=0):
             ep_r[agent] += r
             s[agent] = s_[agent].clone().detach()
             result[len][agent] = round(r, 6)     # current total reward
-        # print('len=',len, 'mdr=', torch.mean(result[len]).item(), flush=True)
-        print(torch.mean(result[len]).item(), flush=True)
+        # print(torch.mean(result[len]).item(), flush=True)
 
         # sample batch transitions
         #sample_index = np.random.choice(MEMORY_CAPACITY, BATCH_SIZE)
@@ -339,7 +276,7 @@ def run_exp(seed=0, NUM_Q=10, NUM_MIN=2, adaeq=0):
                 q_prediction_next_list.append(q_prediction_next)
             q_prediction_next_cat = torch.cat(q_prediction_next_list, 1)
             min_q, min_indices = torch.min(q_prediction_next_cat, dim=1, keepdim=True)
-            y_q = b_r + min_q - update_log_prob * alpha     # alpha is a SAC entropy hyperparameter
+            y_q = b_r + gamma * (min_q - update_log_prob * alpha)     # alpha is a SAC entropy hyperparameter       ***modified on 0718
 
             # if(i==0 or i==1):
             #     print('*******', 'len=', len, ', i=', i, '*******')
@@ -376,31 +313,31 @@ def run_exp(seed=0, NUM_Q=10, NUM_MIN=2, adaeq=0):
                         target_param.data * polyak + param.data * (1 - polyak)
                     )
 
-            dist_tilda = actor(b_s).cpu()     # current state -> action -> log prob
-            a_tilda = torch.zeros(NUM_OF_AGENT, dtype=torch.int)
-            log_prob_tilda = torch.zeros(NUM_OF_AGENT)
-            for j in range(NUM_OF_AGENT):
-                a_tilda[j] = torch.multinomial(dist_tilda[j], 1).item()
-                log_prob_tilda[j] = torch.log(dist_tilda[j,int(a_tilda[j])])
-            a_tilda = a_tilda.reshape([NUM_OF_AGENT,1])
-            a_tilda = a_tilda.to(device)
-            log_prob_tilda = log_prob_tilda.reshape([NUM_OF_AGENT,1])
-            log_prob_tilda = log_prob_tilda.to(device)
+        dist_tilda = actor(b_s).cpu()     # current state -> action -> log prob
+        a_tilda = torch.zeros(NUM_OF_AGENT, dtype=torch.int)
+        log_prob_tilda = torch.zeros(NUM_OF_AGENT)
+        for j in range(NUM_OF_AGENT):
+            a_tilda[j] = torch.multinomial(dist_tilda[j], 1).item()
+            log_prob_tilda[j] = torch.log(dist_tilda[j,int(a_tilda[j])])
+        a_tilda = a_tilda.reshape([NUM_OF_AGENT,1])
+        a_tilda = a_tilda.to(device)
+        log_prob_tilda = log_prob_tilda.reshape([NUM_OF_AGENT,1])
+        log_prob_tilda = log_prob_tilda.to(device)
 
-            q_a_tilda_list = []
-            for sample_idx in range(NUM_Q):
-                q_a_tilda = q_net_list[sample_idx](torch.cat((b_s, a_tilda), 1))
-                q_a_tilda_list.append(q_a_tilda)
-            q_a_tilda_cat = torch.cat(q_a_tilda_list, 1)
-            ave_q = torch.mean(q_a_tilda_cat, dim=1, keepdim=True)
-            actor_loss = (ave_q - b_log).mean()    # as in A2C-parallel-q.py
-            # actor_loss = (ave_q - log_prob_tilda * alpha).mean()    # alpha is a SAC entropy hyperparameter
-            # actor_loss = (log_prob_tilda * alpha - ave_q).mean()    # new loss as in REDQ, not acsent but descent, wrong
-            
-            optimizerA.zero_grad()
-            actor_loss.backward()
-            torch.nn.utils.clip_grad_value_(actor.parameters(), clip)  # gradient clipping
-            optimizerA.step()
+        q_a_tilda_list = []
+        for sample_idx in range(NUM_Q):
+            q_a_tilda = q_net_list[sample_idx](torch.cat((b_s, a_tilda), 1))
+            q_a_tilda_list.append(q_a_tilda)
+        q_a_tilda_cat = torch.cat(q_a_tilda_list, 1)
+        ave_q = torch.mean(q_a_tilda_cat, dim=1, keepdim=True)
+        actor_loss = (ave_q - b_log).mean()    # as in A2C-parallel-q.py
+        # actor_loss = (ave_q - log_prob_tilda * alpha).mean()    # alpha is a SAC entropy hyperparameter
+        # actor_loss = (log_prob_tilda * alpha - ave_q).mean()    # new loss as in REDQ, not acsent but descent
+        
+        optimizerA.zero_grad()
+        actor_loss.backward()
+        torch.nn.utils.clip_grad_value_(actor.parameters(), clip)  # gradient clipping
+        optimizerA.step()
 
         if (len+1) % STEP_PER_EPOCH == 0:
             epoch = len // STEP_PER_EPOCH
@@ -410,65 +347,34 @@ def run_exp(seed=0, NUM_Q=10, NUM_MIN=2, adaeq=0):
 
             if adaeq == 1:
                 if epoch % 5 == 0:
-                    if epoch_exp_error > 0.4 and NUM_MIN < 10:  
-                        lower_bound = NUM_MIN           
-                        NUM_MIN = np.random.randint(lower_bound, 11) 
+                    if epoch_exp_error > 0.4 and NUM_MIN < 10:
+                        lower_bound = NUM_MIN
+                        NUM_MIN = np.random.randint(lower_bound, 11)
                     elif epoch_exp_error < 0.4 and NUM_MIN > 3:
                         upper_bound = NUM_MIN
                         NUM_MIN = np.random.randint(2, upper_bound)
                     else :
                         NUM_MIN = NUM_MIN
 
-    result = result.sum(-1, keepdim = True)
-    result = result / NUM_OF_AGENT
-    res = result.detach().numpy()
-
-    with open('EnsembleQ-N'+str(NUM_Q)+'M'+str(NUM_MIN)+'-'+str(seed)+'.txt', 'a+') as f:
-        for x in res:
-            f.write(str(x.item())+'\n')
-    with open('EnsembleQ-N'+str(NUM_Q)+'M'+str(NUM_MIN)+'-Qerror'+'-'+str(seed)+'.txt', 'a+') as f:
+    # result = result.sum(-1, keepdim = True)
+    # result = result / NUM_OF_AGENT
+    # res = result.detach().numpy()
+    # with open('EnsembleQ-N'+str(NUM_Q)+'M'+str(NUM_MIN)+'-'+str(seed)+'.txt', 'a+') as f:
+    #     for x in res:
+    #         f.write(str(x.item())+'\n')
+    with open('EnsembleQ-N'+str(NUM_Q)+'M'+str(NUM_MIN)+'-'+str(adaeq)+'-'+str(seed)+'-Qerror'+'.txt', 'a+') as f:
         for x in Q_estimation_error:
             f.write(str(x)+'\n')
 
-    # torch.save(actor.state_dict(), 'actor.pkl')
-    # for q_i in range(NUM_Q):
-    #     torch.save(q_net_list[q_i].state_dict(), 'critic_'+q_i+'.pkl')
-
-# def test_agent(agent, test_env, max_ep_len, n_eval=1):
-#     """
-#     This will test the agent's performance by running <n_eval> episodes
-#     During the runs, the agent should only take deterministic action
-#     This function assumes the agent has a <get_test_action()> function
-#     :param agent: agent instance
-#     :param test_env: the environment used for testing
-#     :param max_ep_len: max length of an episode
-#     :param logger: logger to store info in
-#     :param n_eval: number of episodes to run the agent
-#     :return: test return for each episode as a numpy array
-#     """
-#     ep_return_list = np.zeros(n_eval)
-#     for j in range(n_eval):
-#         o, r, d, ep_ret, ep_len = test_env.reset(), 0, False, 0, 0
-#         while not (d or (ep_len == max_ep_len)):
-#             # Take deterministic actions at test time
-#             a = agent.get_test_action(o)
-#             o, r, d, _ = test_env.step(a)
-#             ep_ret = ep_ret + r
-#             ep_len = ep_len + 1
-#         ep_return_list[j] = ep_ret
-#         # if logger is not None:
-#         #     logger.store(TestEpRet=ep_ret, TestEpLen=ep_len)
-#     return ep_return_list
-
-
-def get_redq_true_estimate_value(q_net_list, actor, NUM_Q, n_eval=1):
+def get_redq_true_estimate_value(q_net_list, actor, NUM_Q, n_eval=20):
     # Return estimate and true value (MC simulation) of a set of samples along the episode.
     # Totally use n_eval episode. 
     true_return_list = []
     estimate_return_list = []
     max_ep_len = 100
+    avg_exp_error = []      # multiple Monte Carlo episodes
 
-    for j in range(n_eval):
+    for idx_eval in range(n_eval):
         #initialize state
         temp_Buffer = Buffer.copy()
         temp_Deficit = Deficit.copy()
@@ -490,6 +396,9 @@ def get_redq_true_estimate_value(q_net_list, actor, NUM_Q, n_eval=1):
         # temp_e.fill(MAX_DEADLINE+1)
         # temp_p_current.fill(0)
         # temp_p_next.fill(0)
+        # temp_Arrival.fill(0)
+        # temp_sumArrival.fill(0)
+        # temp_Action.fill(0)
         agent = 0
         temp_s = generateState(temp_Deficit[agent], temp_e[agent], temp_Buffer[agent][:,1:MAX_DEADLINE+1], temp_p_next[agent])
 
@@ -560,16 +469,17 @@ def get_redq_true_estimate_value(q_net_list, actor, NUM_Q, n_eval=1):
             ep_ret_true = ep_ret_true + r_true * (gamma ** ep_len_true) * 1 # discounted MC return
             reward_list.append(r_true)
             ep_len_true = ep_len_true  + 1
-        # ****** estimate Q value of the last (s,a) pair
-        dist = actor(temp_s.to(device)).detach().cpu()
-        a = torch.multinomial(dist, 1).item()
-        q_prediction_list = []
-        det_action = torch.tensor([a])
-        # print(temp_s, det_action, ', Just for test!')
-        for q_i in range(NUM_Q):
-            q_prediction = q_net_list[q_i](torch.cat((temp_s[None,:].to(device), det_action[None,:].to(device)), 1))  # pay attention to torch.cat()
-            q_prediction_list.append(q_prediction)
-        q_last = torch.cat(q_prediction_list, 1).mean(dim=1).reshape(-1, 1).item()
+        # # ****** estimate Q value of the last (s,a) pair
+        # dist = actor(temp_s.to(device)).detach().cpu()
+        # a = torch.multinomial(dist, 1).item()
+        # q_prediction_list = []
+        # det_action = torch.tensor([a])
+        # # print(temp_s, det_action, ', Just for test!')
+        # for q_i in range(NUM_Q):
+        #     q_prediction = q_net_list[q_i](torch.cat((temp_s[None,:].to(device), det_action[None,:].to(device)), 1))  # pay attention to torch.cat()
+        #     q_prediction_list.append(q_prediction)
+        # q_last = torch.cat(q_prediction_list, 1).mean(dim=1).reshape(-1, 1).item()
+        q_last = 0
 
         true_return_list = []
         true_return_list.append(ep_ret_true + q_last)   # add the estimate Q value of the last (s,a) pair
@@ -585,7 +495,10 @@ def get_redq_true_estimate_value(q_net_list, actor, NUM_Q, n_eval=1):
         exp_error = np.true_divide(exp_error, expected_true_value)
         std_error = np.std(estimate_return_list_array-true_return_list_array)
         std_error = np.true_divide(std_error, expected_true_value)
-    return exp_error
+        avg_exp_error.append(exp_error)
+
+    avg_exp_error = np.mean(avg_exp_error)
+    return avg_exp_error
 
 if __name__ == '__main__':
     import argparse
