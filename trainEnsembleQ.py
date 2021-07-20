@@ -341,7 +341,7 @@ def run_exp(seed=0, NUM_Q=10, NUM_MIN=2, adaeq=0):
 
         if (len+1) % STEP_PER_EPOCH == 0:
             epoch = len // STEP_PER_EPOCH
-            epoch_exp_error = get_redq_true_estimate_value(q_net_list, actor, NUM_Q, n_eval=20)
+            epoch_exp_error = get_redq_true_estimate_value(q_net_list, actor, NUM_Q, n_eval=1)
             print('len=', len, ', epoch_exp_error=', epoch_exp_error, flush=True)
             Q_estimation_error.append(epoch_exp_error)
 
