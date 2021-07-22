@@ -15,15 +15,18 @@ os.environ['KMP_DUPLICATE_LIB_OK']='True'
 device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
 clip = 10.0     # gradient clipping
 bound = 20.0    # clip input of softmax within [-bound,bound] to avoid nan
-LR = 3e-4       # learning rate
+
 # Hyperparameters
 # NUM_Q = 2  # N: number of Q networks
 # NUM_MIN = 2 # M: number of selected Q networks to update target Q value
 POLICY_UPDATE_DELAY = 10      # G: policy update delay
 NUM_OF_AGENT=32
-polyak = 0.995   # update target networks
-alpha = 1.0     # SAC entropy hyperparameter
-gamma = 0.99
+polyak = 0.99   # update target networks
+# alpha = 0     # SAC entropy hyperparameter
+# gamma = 0.99
+# LR = 3e-4       # learning rate
+# LR = 1e-3
+
 
 STEP_PER_EPOCH = 100
 NUM_OF_EPOCH = 200
@@ -33,7 +36,6 @@ LEN_EPISODE = STEP_PER_EPOCH * NUM_OF_EPOCH
 # NUM_EPISODE = 10  # the number of episode
 # BATCH_SIZE = 128
 HIDDEN_SIZE = 256    # the dim of hidden layers
-MEMORY_CAPACITY = NUM_OF_AGENT  # H*K ------------------0710 updated--------------------
 
 NUM_OF_LINKS=6
 MAX_DEADLINE=10
@@ -54,8 +56,20 @@ p_current = np.zeros((NUM_OF_AGENT, NUM_OF_LINKS), dtype=np.float)    #current d
 p_next = np.zeros((NUM_OF_AGENT, NUM_OF_LINKS), dtype=np.float)   #next delivery ratio
 N_ACTIONS = NUM_OF_LINKS
 N_STATES = NUM_OF_LINKS * (MAX_DEADLINE + 3)    #State s = (Deficit, e, Buffer, p)
+
+MEMORY_CAPACITY = NUM_OF_AGENT  # H*K ------------------0710 updated--------------------
 memory_counter = 0
 memory = np.zeros((MEMORY_CAPACITY, N_STATES * 2 + 3))
+
+# used to store all visited states (no more than 1000)
+TOTAL_MEMORY_CAPACITY = 1000
+total_memory_counter = 0
+total_memory_is_full = False
+total_memory = np.zeros((TOTAL_MEMORY_CAPACITY, N_STATES))
+savedBuffer = np.zeros((TOTAL_MEMORY_CAPACITY, NUM_OF_LINKS, MAX_DEADLINE+2))
+savedDeficit = np.zeros((TOTAL_MEMORY_CAPACITY, NUM_OF_LINKS))
+savedTotalArrival = np.zeros((TOTAL_MEMORY_CAPACITY, NUM_OF_LINKS))
+savedTotalDelivered = np.zeros((TOTAL_MEMORY_CAPACITY, NUM_OF_LINKS))
 
 s = torch.zeros(NUM_OF_AGENT, N_STATES)
 s_ = torch.zeros(NUM_OF_AGENT, N_STATES)
@@ -69,14 +83,34 @@ def generateState(Deficit, e, Buffer, p):  #generate 1-D state
     result = torch.FloatTensor(result)
     return result
 
-def store_transition(s, a, r, s_, log_prob):
-    global memory
+def store_transition(memory, s, a, r, s_, log_prob):
+    # global memory
     global memory_counter
+    global MEMORY_CAPACITY
     transition = np.hstack((s, [a, r], s_, [log_prob]))
     # replace the old memory with new memory
     index = memory_counter % MEMORY_CAPACITY
     memory[index, :] = transition
     memory_counter += 1
+
+def store_total_transition(
+    total_memory, s_, 
+    savedBuffer, savedDeficit, savedTotalArrival, savedTotalDelivered, 
+    Buffer, Deficit, totalArrival, totalDelivered):
+    global total_memory_counter
+    global total_memory_is_full
+    global TOTAL_MEMORY_CAPACITY
+    if total_memory_counter >= TOTAL_MEMORY_CAPACITY:
+        total_memory_is_full = True 
+    transition = np.hstack((s_))
+    # replace the old memory with new memory
+    index = total_memory_counter % TOTAL_MEMORY_CAPACITY
+    total_memory[index, :] = transition
+    savedBuffer[index] = Buffer.copy()
+    savedDeficit[index] = Deficit.copy()
+    savedTotalArrival[index] = totalArrival.copy()
+    savedTotalDelivered[index] = totalDelivered.copy()
+    total_memory_counter += 1
 
 # Poisson distribution
 def ARR_POISSON(lam, agent):
@@ -127,7 +161,7 @@ class Critic(nn.Module):
         state_value = self.value(x)
         return state_value
 
-def run_exp(seed=0, NUM_Q=10, NUM_MIN=2, adaeq=0):
+def run_exp(seed=0, NUM_Q=10, NUM_MIN=2, adaeq=0, tp=0.001, lr=3e-4, alpha=0, gamma=0.99, rscale=100):
     torch.manual_seed(seed)
     np.random.seed(seed)
 
@@ -142,14 +176,14 @@ def run_exp(seed=0, NUM_Q=10, NUM_MIN=2, adaeq=0):
         new_q_target_net.load_state_dict(new_q_net.state_dict())
         q_target_net_list.append(new_q_target_net)
 
-    optimizerA = optim.Adam(actor.parameters(), lr=LR)
+    optimizerA = optim.Adam(actor.parameters(), lr=lr)
     optimizerQ_list = []
     for q_i in range(NUM_Q):
-        optimizerQ_list.append(optim.Adam(q_net_list[q_i].parameters(), lr=LR))
+        optimizerQ_list.append(optim.Adam(q_net_list[q_i].parameters(), lr=lr))
 
     mse_criterion = nn.MSELoss()
 
-    result = torch.zeros((LEN_EPISODE, NUM_OF_AGENT))        # store the reward of each trajectory
+    # result = torch.zeros((LEN_EPISODE, NUM_OF_AGENT))        # store the reward of each trajectory
     Q_estimation_error = []
 
     #initialize state 
@@ -167,12 +201,12 @@ def run_exp(seed=0, NUM_Q=10, NUM_MIN=2, adaeq=0):
         s[agent] = generateState(Deficit[agent], e[agent], Buffer[agent][:,1:MAX_DEADLINE+1], p_next[agent])
 
     #total reward of one episode
-    ep_r = np.zeros((NUM_OF_AGENT), dtype=np.float)
+    # ep_r = np.zeros((NUM_OF_AGENT), dtype=np.float)
 
-    EVAL_INT = 5000
+    EVAL_INT = 10000
     for len in range(LEN_EPISODE):  #length of each episode
         if (len+1) % EVAL_INT == 0:
-            torch.save(actor.state_dict(), 'EnsembleQ-N'+str(NUM_Q)+'M'+str(NUM_MIN)+'-'+str(adaeq)+'-'+str(seed)+'-'+str(len+1)+'.pkl')
+            torch.save(actor.state_dict(), 'EnsembleQ-N'+str(NUM_Q)+'M'+str(NUM_MIN)+'-'+str(adaeq)+'-'+str(seed)+'-'+str(tp)+'-'+str(lr)+'-'+str(alpha)+'-'+str(gamma)+'-'+str(rscale)+'-'+str(len+1)+'.pkl')
             
         for agent in range(NUM_OF_AGENT):
         #for num in range(MEMORY_CAPACITY):   #generate multiple samples during each time slot
@@ -230,13 +264,20 @@ def run_exp(seed=0, NUM_Q=10, NUM_MIN=2, adaeq=0):
                     p_next[agent][l] = totalDelivered[agent][l] / totalArrival[agent][l] #next delivery ratio
 
             s_[agent] = generateState(Deficit[agent], e[agent], Buffer[agent][:,1:MAX_DEADLINE+1], p_next[agent])
-            r = np.min(p_next[agent])
+            # r = np.min(p_next[agent])
+            r = rscale * np.min(p_next[agent])   # reward scaling
 
-            store_transition(s[agent], a, r, s_[agent], log_prob)
+            store_transition(memory, s[agent], a, r, s_[agent], log_prob)
+            # store_transition(total_memory, total_memory_counter, TOTAL_MEMORY_CAPACITY, s_[agent])  # total memory
+            store_total_transition(
+                total_memory, s_[agent], 
+                savedBuffer, savedDeficit, savedTotalArrival, savedTotalDelivered, 
+                Buffer[agent], Deficit[agent], totalArrival[agent], totalDelivered[agent])
+
             p_current[agent] = p_next[agent].copy()   #current delivery ratio
-            ep_r[agent] += r
+            # ep_r[agent] += r
             s[agent] = s_[agent].clone().detach()
-            result[len][agent] = round(r, 6)     # current total reward
+            # result[len][agent] = round(r, 6)     # current total reward
         # print(torch.mean(result[len]).item(), flush=True)
 
         # sample batch transitions
@@ -277,6 +318,9 @@ def run_exp(seed=0, NUM_Q=10, NUM_MIN=2, adaeq=0):
             q_prediction_next_cat = torch.cat(q_prediction_next_list, 1)
             min_q, min_indices = torch.min(q_prediction_next_cat, dim=1, keepdim=True)
             y_q = b_r + gamma * (min_q - update_log_prob * alpha)     # alpha is a SAC entropy hyperparameter       ***modified on 0718
+            # y_q = b_r + gamma * min_q   # updated on 0720
+            # if i == 0 or i == 5:
+            #     print('len=', len, '\n target_q=', y_q.transpose(0,1), '\n min_q=', min_q.transpose(0,1), flush=True)
 
             # if(i==0 or i==1):
             #     print('*******', 'len=', len, ', i=', i, '*******')
@@ -330,9 +374,11 @@ def run_exp(seed=0, NUM_Q=10, NUM_MIN=2, adaeq=0):
             q_a_tilda_list.append(q_a_tilda)
         q_a_tilda_cat = torch.cat(q_a_tilda_list, 1)
         ave_q = torch.mean(q_a_tilda_cat, dim=1, keepdim=True)
-        actor_loss = (ave_q - b_log).mean()    # as in A2C-parallel-q.py
+        # actor_loss = - ave_q.mean()   # as in TD3
+        actor_loss = (ave_q - alpha * b_log).mean()    # as in A2C-parallel-q.py
         # actor_loss = (ave_q - log_prob_tilda * alpha).mean()    # alpha is a SAC entropy hyperparameter
         # actor_loss = (log_prob_tilda * alpha - ave_q).mean()    # new loss as in REDQ, not acsent but descent
+        
         
         optimizerA.zero_grad()
         actor_loss.backward()
@@ -341,16 +387,16 @@ def run_exp(seed=0, NUM_Q=10, NUM_MIN=2, adaeq=0):
 
         if (len+1) % STEP_PER_EPOCH == 0:
             epoch = len // STEP_PER_EPOCH
-            epoch_exp_error = get_redq_true_estimate_value(q_net_list, actor, NUM_Q, n_eval=20)
+            epoch_exp_error = get_redq_true_estimate_value(q_net_list, actor, NUM_Q, n_sa_pair=10, n_eval=10, max_ep_len=500, gamma=gamma, rscale=rscale)
             print('len=', len, ', epoch_exp_error=', epoch_exp_error, flush=True)
             Q_estimation_error.append(epoch_exp_error)
 
             if adaeq == 1:
                 if epoch % 5 == 0:
-                    if epoch_exp_error > 0.4 and NUM_MIN < 10:
+                    if epoch_exp_error > tp and NUM_MIN < 10:
                         lower_bound = NUM_MIN
                         NUM_MIN = np.random.randint(lower_bound, 11)
-                    elif epoch_exp_error < 0.4 and NUM_MIN > 3:
+                    elif epoch_exp_error < tp and NUM_MIN > 3:
                         upper_bound = NUM_MIN
                         NUM_MIN = np.random.randint(2, upper_bound)
                     else :
@@ -362,52 +408,66 @@ def run_exp(seed=0, NUM_Q=10, NUM_MIN=2, adaeq=0):
     # with open('EnsembleQ-N'+str(NUM_Q)+'M'+str(NUM_MIN)+'-'+str(seed)+'.txt', 'a+') as f:
     #     for x in res:
     #         f.write(str(x.item())+'\n')
-    with open('EnsembleQ-N'+str(NUM_Q)+'M'+str(NUM_MIN)+'-'+str(adaeq)+'-'+str(seed)+'-Qerror'+'.txt', 'a+') as f:
+    with open('EnsembleQ-N'+str(NUM_Q)+'M'+str(NUM_MIN)+'-'+str(adaeq)+'-'+str(seed)+'-'+str(tp)+'-'+str(lr)+'-'+str(alpha)+'-'+str(gamma)+'-'+str(rscale)+'-Qerror'+'.txt', 'a+') as f:
         for x in Q_estimation_error:
             f.write(str(x)+'\n')
 
-def get_redq_true_estimate_value(q_net_list, actor, NUM_Q, n_eval=20):
-    # Return estimate and true value (MC simulation) of a set of samples along the episode.
-    # Totally use n_eval episode. 
-    max_ep_len = 100
-    avg_exp_error = []      # multiple Monte Carlo episodes
+def get_redq_true_estimate_value(q_net_list, actor, NUM_Q, n_sa_pair, n_eval, max_ep_len, gamma, rscale):
+    # Return estimate and true value (MC simulation) of a set of samples.
+    # Totally use n_sa_pair (s,a) pairs and n_eval MC episodes for each pair. 
+    # max_ep_len = 500
+    
+    true_return_list = []       # true Q value
+    estimate_return_list = []   # Q estimate
+    # avg_exp_error = []      # multiple Monte Carlo episodes
 
-    for idx_eval in range(n_eval):
-        true_return_list = []
-        estimate_return_list = []
+    print(total_memory_counter, TOTAL_MEMORY_CAPACITY, total_memory_is_full, flush=True)
+    sample_index = np.random.choice(TOTAL_MEMORY_CAPACITY if total_memory_is_full else total_memory_counter, n_sa_pair, replace=True)
 
-        #initialize state
-        temp_Buffer = Buffer.copy()
-        temp_Deficit = Deficit.copy()
-        temp_totalArrival = totalArrival.copy()
-        temp_totalDelivered = totalDelivered.copy()
-        temp_totalBuff = totalBuff.copy()
-        temp_e = e.copy()
-        temp_p_current = p_current.copy()
-        temp_p_next = p_next.copy()
-        temp_Arrival = Arrival.copy()
-        temp_sumArrival = sumArrival.copy()
-        temp_Action = Action.copy()
+    temp_Buffer = Buffer.copy()
+    temp_Deficit = Deficit.copy()
+    temp_totalArrival = totalArrival.copy()
+    temp_totalDelivered = totalDelivered.copy()
+    temp_totalBuff = totalBuff.copy()
+    temp_e = e.copy()
+    temp_p_current = p_current.copy()
+    temp_p_next = p_next.copy()
+    temp_Arrival = Arrival.copy()
+    temp_sumArrival = sumArrival.copy()
+    temp_Action = Action.copy()
+    
+    agent = 0   # A-C agent for test
 
-        # temp_Buffer.fill(0)
-        # temp_Deficit.fill(0)
-        # temp_totalArrival.fill(0)    #mark
-        # temp_totalDelivered.fill(0)
-        # temp_totalBuff.fill(0)
-        # temp_e.fill(MAX_DEADLINE+1)
-        # temp_p_current.fill(0)
-        # temp_p_next.fill(0)
-        # temp_Arrival.fill(0)
-        # temp_sumArrival.fill(0)
-        # temp_Action.fill(0)
-        agent = 0
-        temp_s = generateState(temp_Deficit[agent], temp_e[agent], temp_Buffer[agent][:,1:MAX_DEADLINE+1], temp_p_next[agent])
+    for idx_pair in sample_index:
+        true_return_list_sa = []    # Q(s,a) estimated by multiple MC rollout episodes from (s,a)
+        s = Variable(torch.FloatTensor(total_memory[idx_pair, :]))
+        s = s.to(device)
 
-        r_true, ep_ret_true, ep_len_true = 0, 0, 0
-        reward_list = []
-        while not (ep_len_true == max_ep_len):
-            dist = actor(temp_s.to(device)).detach().cpu()
-            a = torch.multinomial(dist, 1).item()
+        temp_Buffer[agent] = savedBuffer[idx_pair].copy()
+        temp_Deficit[agent] = savedDeficit[idx_pair].copy()
+        temp_totalArrival[agent] = savedTotalArrival[idx_pair].copy()
+        temp_totalDelivered[agent] = savedTotalDelivered[idx_pair].copy()
+
+        temp_totalBuff.fill(0)
+        temp_e.fill(MAX_DEADLINE+1)
+        temp_p_current.fill(0)
+        temp_p_next.fill(0)
+        temp_Arrival.fill(0)
+        temp_sumArrival.fill(0)
+        temp_Action.fill(0)
+
+        dist = actor(s.to(device)).detach().cpu()
+        a = torch.multinomial(dist, 1).item()
+
+        q_prediction_list = []
+        det_action = torch.tensor([a])
+        for q_i in range(NUM_Q):
+            q_prediction = q_net_list[q_i](torch.cat((s[None,:].to(device), det_action[None,:].to(device)), 1))  # pay attention to torch.cat()
+            q_prediction_list.append(q_prediction)
+        q_prediction_list_mean = torch.cat(q_prediction_list, 1).mean(dim=1).reshape(-1, 1) # Copy 154 line
+        estimate_return_list.append(q_prediction_list_mean)
+
+        for idx_eval in range(n_eval):
             ARR_POISSON(LAMBDA, agent)
             temp_Arrival = Arrival.copy()
             # update total arrival packets at current time slot
@@ -453,54 +513,93 @@ def get_redq_true_estimate_value(q_net_list, actor, NUM_Q, n_eval=20):
                 else:
                     temp_p_next[agent][l] = temp_totalDelivered[agent][l] / temp_totalArrival[agent][l] #next delivery ratio
 
-            q_prediction_list = []
-            det_action = torch.tensor([a])
-            # print(temp_s, det_action, ', Just for test!')
-            for q_i in range(NUM_Q):
-                q_prediction = q_net_list[q_i](torch.cat((temp_s[None,:].to(device), det_action[None,:].to(device)), 1))  # pay attention to torch.cat()
-                q_prediction_list.append(q_prediction)
-            q_prediction_list_mean = torch.cat(q_prediction_list, 1).mean(dim=1).reshape(-1, 1) # Copy 154 line
-            estimate_return_list.append(q_prediction_list_mean)
-
             temp_s_ = generateState(temp_Deficit[agent], temp_e[agent], temp_Buffer[agent][:,1:MAX_DEADLINE+1], temp_p_next[agent])
-            r_true = np.min(temp_p_next[agent])
+            # r_true = np.min(temp_p_next[agent])
+            r_true = rscale * np.min(temp_p_next[agent]) # reward scaling
             temp_p_current[agent] = temp_p_next[agent].copy()   #current delivery ratio
             temp_s = temp_s_.clone().detach()
 
-            ep_ret_true = ep_ret_true + r_true * (gamma ** ep_len_true) * 1 # discounted MC return
-            reward_list.append(r_true)
-            ep_len_true = ep_len_true  + 1
-        # # ****** estimate Q value of the last (s,a) pair
-        # dist = actor(temp_s.to(device)).detach().cpu()
-        # a = torch.multinomial(dist, 1).item()
-        # q_prediction_list = []
-        # det_action = torch.tensor([a])
-        # # print(temp_s, det_action, ', Just for test!')
-        # for q_i in range(NUM_Q):
-        #     q_prediction = q_net_list[q_i](torch.cat((temp_s[None,:].to(device), det_action[None,:].to(device)), 1))  # pay attention to torch.cat()
-        #     q_prediction_list.append(q_prediction)
-        # q_last = torch.cat(q_prediction_list, 1).mean(dim=1).reshape(-1, 1).item()
-        q_last = 0
+            ep_ret_true = r_true
 
-        true_return_list = []
-        true_return_list.append(ep_ret_true + q_last)   # add the estimate Q value of the last (s,a) pair
-        for ii in range(len(reward_list)-1):
-            tem_reward = np.true_divide(true_return_list[ii]-reward_list[ii],gamma) + q_last    # add the estimate Q value of the last (s,a) pair
-            true_return_list.append(tem_reward)
+            ep_len_true = 1
+            while not (ep_len_true == max_ep_len):
+                dist = actor(temp_s.to(device)).detach().cpu()
+                a = torch.multinomial(dist, 1).item()
+                ARR_POISSON(LAMBDA, agent)
+                temp_Arrival = Arrival.copy()
+                # update total arrival packets at current time slot
+                temp_sumArrival.fill(0)
+                for l in range(NUM_OF_LINKS):
+                    for d in range(1, MAX_DEADLINE+1):
+                        temp_sumArrival[agent][l] += temp_Arrival[agent][l][d]
+                # update total arrival packets from beginning
+                for l in range(NUM_OF_LINKS):
+                    temp_totalArrival[agent][l] += temp_sumArrival[agent][l]
+                # update buffer
+                temp_Action.fill(0)
+                for d in range(1, MAX_DEADLINE+1):
+                    if temp_Buffer[agent][a][d] > 0:
+                        temp_Action[agent][a][d] = 1
+                        # update total delivered packets from beginning
+                        temp_totalDelivered[agent][a] += 1
+                        break
+                for l in range(NUM_OF_LINKS):
+                    for d in range(1, MAX_DEADLINE+1):
+                        temp_Buffer[agent][l][d] = max(temp_Buffer[agent][l][d+1] + temp_Arrival[agent][l][d] - temp_Action[agent][l][d+1], 0)
+                # update totalBuff
+                temp_totalBuff.fill(0)
+                for l in range(NUM_OF_LINKS):
+                    for d in range(1, MAX_DEADLINE+1):
+                        temp_totalBuff[agent][l] = temp_totalBuff[agent][l] + temp_Buffer[agent][l][d]
+                # update the earliest deadline on link l
+                temp_e.fill(MAX_DEADLINE+1)      #initial earliest deadline should be MAX_DEADLINE+1
+                for l in range(NUM_OF_LINKS):
+                    for d in range(1, MAX_DEADLINE+1):
+                        if temp_Buffer[agent][l][d] > 0:
+                            temp_e[agent][l] = d
+                            break
+                # update deficit
+                for l in range(NUM_OF_LINKS):
+                    if l == a:
+                        temp_Deficit[agent][l] = max(temp_Deficit[agent][l] + temp_sumArrival[agent][l] * INIT_P[l] - 1, 0)
+                    else:
+                        temp_Deficit[agent][l] = max(temp_Deficit[agent][l] + temp_sumArrival[agent][l] * INIT_P[l], 0)
+                for l in range(NUM_OF_LINKS):
+                    if temp_totalArrival[agent][l] == 0:
+                        temp_p_next[agent][l] = 0
+                    else:
+                        temp_p_next[agent][l] = temp_totalDelivered[agent][l] / temp_totalArrival[agent][l] #next delivery ratio
 
-        estimate_return_list_array = torch.cat(estimate_return_list, 1).detach().cpu().numpy().reshape(-1)
-        true_return_list_array = np.array(true_return_list)
+                temp_s_ = generateState(temp_Deficit[agent], temp_e[agent], temp_Buffer[agent][:,1:MAX_DEADLINE+1], temp_p_next[agent])
+                # r_true = np.min(temp_p_next[agent])
+                r_true = rscale * np.min(temp_p_next[agent]) # reward scaling
+                temp_p_current[agent] = temp_p_next[agent].copy()   #current delivery ratio
+                temp_s = temp_s_.clone().detach()
 
-        expected_true_value = abs(np.mean(true_return_list_array))
-        # print('Just for test! ', np.size(estimate_return_list_array), np.size(true_return_list_array), flush=True)
-        exp_error = np.mean(estimate_return_list_array-true_return_list_array)
-        exp_error = np.true_divide(exp_error, expected_true_value)
-        std_error = np.std(estimate_return_list_array-true_return_list_array)
-        std_error = np.true_divide(std_error, expected_true_value)
-        avg_exp_error.append(exp_error)
+                ep_ret_true = ep_ret_true + r_true * (gamma ** ep_len_true) # discounted MC return
+                ep_len_true = ep_len_true  + 1
 
-    avg_exp_error = np.mean(avg_exp_error)
-    return avg_exp_error
+            true_return_list_sa.append(ep_ret_true)
+
+        true_return_list_sa_avg = np.mean(true_return_list_sa)
+        true_return_list.append(true_return_list_sa_avg)
+
+    estimate_return_list_array = torch.cat(estimate_return_list, 1).detach().cpu().numpy().reshape(-1)
+    true_return_list_array = np.array(true_return_list)
+
+    expected_true_value = abs(np.mean(true_return_list_array))
+    exp_error = np.mean(estimate_return_list_array-true_return_list_array)
+    exp_error = np.true_divide(exp_error, expected_true_value)
+    std_error = np.std(estimate_return_list_array-true_return_list_array)
+    std_error = np.true_divide(std_error, expected_true_value)
+
+    print(
+        'estimate_return_list_array:\n', estimate_return_list_array,
+        '\n true_return_list_array:\n', true_return_list_array, 
+        '\n exp_error:\n', exp_error,
+        '\n expected_true_value:\n', expected_true_value,
+        flush=True)
+    return exp_error
 
 if __name__ == '__main__':
     import argparse
@@ -509,5 +608,154 @@ if __name__ == '__main__':
     parser.add_argument('--n', type=int, default=10)
     parser.add_argument('--m', type=int, default=2)
     parser.add_argument('--adaeq', type=int, default=0)
+    parser.add_argument('--tp', type=float, default=0.1)
+    parser.add_argument('--lr', type=float, default=3e-4)
+    parser.add_argument('--alpha', type=float, default=0)
+    parser.add_argument('--gamma', type=float, default=0.99)
+    parser.add_argument('--rscale', type=float, default=100)
     args = parser.parse_args()
-    run_exp(seed=args.seed, NUM_Q=args.n, NUM_MIN=args.m, adaeq=args.adaeq)
+    run_exp(seed=args.seed, NUM_Q=args.n, NUM_MIN=args.m, adaeq=args.adaeq, tp=args.tp, lr=args.lr, alpha=args.alpha, gamma=args.gamma, rscale = args.rscale)
+
+
+
+# def get_redq_true_estimate_value(q_net_list, actor, NUM_Q, n_eval=20):
+#     # Return estimate and true value (MC simulation) of a set of samples along the episode.
+#     # Totally use n_eval episode. 
+#     max_ep_len = 100
+#     avg_exp_error = []      # multiple Monte Carlo episodes
+
+#     for idx_eval in range(n_eval):
+#         true_return_list = []
+#         estimate_return_list = []
+
+#         #initialize state
+#         temp_Buffer = Buffer.copy()
+#         temp_Deficit = Deficit.copy()
+#         temp_totalArrival = totalArrival.copy()
+#         temp_totalDelivered = totalDelivered.copy()
+#         temp_totalBuff = totalBuff.copy()
+#         temp_e = e.copy()
+#         temp_p_current = p_current.copy()
+#         temp_p_next = p_next.copy()
+#         temp_Arrival = Arrival.copy()
+#         temp_sumArrival = sumArrival.copy()
+#         temp_Action = Action.copy()
+
+#         # temp_Buffer.fill(0)
+#         # temp_Deficit.fill(0)
+#         # temp_totalArrival.fill(0)    #mark
+#         # temp_totalDelivered.fill(0)
+#         # temp_totalBuff.fill(0)
+#         # temp_e.fill(MAX_DEADLINE+1)
+#         # temp_p_current.fill(0)
+#         # temp_p_next.fill(0)
+#         # temp_Arrival.fill(0)
+#         # temp_sumArrival.fill(0)
+#         # temp_Action.fill(0)
+#         agent = 0
+#         temp_s = generateState(temp_Deficit[agent], temp_e[agent], temp_Buffer[agent][:,1:MAX_DEADLINE+1], temp_p_next[agent])
+
+#         r_true, ep_ret_true, ep_len_true = 0, 0, 0
+#         reward_list = []
+#         while not (ep_len_true == max_ep_len):
+#             dist = actor(temp_s.to(device)).detach().cpu()
+#             a = torch.multinomial(dist, 1).item()
+#             ARR_POISSON(LAMBDA, agent)
+#             temp_Arrival = Arrival.copy()
+#             # update total arrival packets at current time slot
+#             temp_sumArrival.fill(0)
+#             for l in range(NUM_OF_LINKS):
+#                 for d in range(1, MAX_DEADLINE+1):
+#                     temp_sumArrival[agent][l] += temp_Arrival[agent][l][d]
+#             # update total arrival packets from beginning
+#             for l in range(NUM_OF_LINKS):
+#                 temp_totalArrival[agent][l] += temp_sumArrival[agent][l]
+#             # update buffer
+#             temp_Action.fill(0)
+#             for d in range(1, MAX_DEADLINE+1):
+#                 if temp_Buffer[agent][a][d] > 0:
+#                     temp_Action[agent][a][d] = 1
+#                     # update total delivered packets from beginning
+#                     temp_totalDelivered[agent][a] += 1
+#                     break
+#             for l in range(NUM_OF_LINKS):
+#                 for d in range(1, MAX_DEADLINE+1):
+#                     temp_Buffer[agent][l][d] = max(temp_Buffer[agent][l][d+1] + temp_Arrival[agent][l][d] - temp_Action[agent][l][d+1], 0)
+#             # update totalBuff
+#             temp_totalBuff.fill(0)
+#             for l in range(NUM_OF_LINKS):
+#                 for d in range(1, MAX_DEADLINE+1):
+#                     temp_totalBuff[agent][l] = temp_totalBuff[agent][l] + temp_Buffer[agent][l][d]
+#             # update the earliest deadline on link l
+#             temp_e.fill(MAX_DEADLINE+1)      #initial earliest deadline should be MAX_DEADLINE+1
+#             for l in range(NUM_OF_LINKS):
+#                 for d in range(1, MAX_DEADLINE+1):
+#                     if temp_Buffer[agent][l][d] > 0:
+#                         temp_e[agent][l] = d
+#                         break
+#             # update deficit
+#             for l in range(NUM_OF_LINKS):
+#                 if l == a:
+#                     temp_Deficit[agent][l] = max(temp_Deficit[agent][l] + temp_sumArrival[agent][l] * INIT_P[l] - 1, 0)
+#                 else:
+#                     temp_Deficit[agent][l] = max(temp_Deficit[agent][l] + temp_sumArrival[agent][l] * INIT_P[l], 0)
+#             for l in range(NUM_OF_LINKS):
+#                 if temp_totalArrival[agent][l] == 0:
+#                     temp_p_next[agent][l] = 0
+#                 else:
+#                     temp_p_next[agent][l] = temp_totalDelivered[agent][l] / temp_totalArrival[agent][l] #next delivery ratio
+
+#             q_prediction_list = []
+#             det_action = torch.tensor([a])
+#             # print(temp_s, det_action, ', Just for test!')
+#             for q_i in range(NUM_Q):
+#                 q_prediction = q_net_list[q_i](torch.cat((temp_s[None,:].to(device), det_action[None,:].to(device)), 1))  # pay attention to torch.cat()
+#                 q_prediction_list.append(q_prediction)
+#             q_prediction_list_mean = torch.cat(q_prediction_list, 1).mean(dim=1).reshape(-1, 1) # Copy 154 line
+#             estimate_return_list.append(q_prediction_list_mean)
+
+#             temp_s_ = generateState(temp_Deficit[agent], temp_e[agent], temp_Buffer[agent][:,1:MAX_DEADLINE+1], temp_p_next[agent])
+#             r_true = np.min(temp_p_next[agent])
+#             temp_p_current[agent] = temp_p_next[agent].copy()   #current delivery ratio
+#             temp_s = temp_s_.clone().detach()
+
+#             ep_ret_true = ep_ret_true + r_true * (gamma ** ep_len_true) * 1 # discounted MC return
+#             reward_list.append(r_true)
+#             ep_len_true = ep_len_true  + 1
+
+#         # ****** estimate Q value of the last (s,a) pair
+#         dist = actor(temp_s.to(device)).detach().cpu()
+#         a = torch.multinomial(dist, 1).item()
+#         q_prediction_list = []
+#         det_action = torch.tensor([a])
+#         # print(temp_s, det_action, ', Just for test!')
+#         for q_i in range(NUM_Q):
+#             q_prediction = q_net_list[q_i](torch.cat((temp_s[None,:].to(device), det_action[None,:].to(device)), 1))  # pay attention to torch.cat()
+#             q_prediction_list.append(q_prediction)
+#         q_last = torch.cat(q_prediction_list, 1).mean(dim=1).reshape(-1, 1).item()
+
+#         # q_last = 0
+#         true_return_list = []
+#         true_return_list.append(ep_ret_true + q_last * (gamma ** max_ep_len))   # add the estimate Q value of the last (s,a) pair
+#         for ii in range(len(reward_list)-1):
+#             tem_reward = np.true_divide(true_return_list[ii]-reward_list[ii],gamma)
+#             true_return_list.append(tem_reward)
+
+#         estimate_return_list_array = torch.cat(estimate_return_list, 1).detach().cpu().numpy().reshape(-1)
+#         true_return_list_array = np.array(true_return_list)
+
+#         expected_true_value = abs(np.mean(true_return_list_array))
+#         exp_error = np.mean(estimate_return_list_array-true_return_list_array)
+#         exp_error = np.true_divide(exp_error, expected_true_value)
+#         std_error = np.std(estimate_return_list_array-true_return_list_array)
+#         std_error = np.true_divide(std_error, expected_true_value)
+#         avg_exp_error.append(exp_error)
+
+#     print(
+#         'estimate_return_list_array:\n', estimate_return_list_array,
+#         '\n true_return_list_array:\n', true_return_list_array, 
+#         '\n exp_error:\n', exp_error,
+#         '\n expected_true_value:\n', expected_true_value,
+#         flush=True)
+#     avg_exp_error = np.mean(avg_exp_error)
+#     return avg_exp_error
